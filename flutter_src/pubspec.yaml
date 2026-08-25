@@ -1,0 +1,21 @@
+name: photo_album
+description: "Personal photo album for Android (date + folder views)."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  photo_manager: ^3.6.0
+  photo_manager_image_provider: ^2.2.0
+  share_plus: ^10.1.2
+  shared_preferences: ^2.3.3
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

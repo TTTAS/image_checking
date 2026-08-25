@@ -1,0 +1,27 @@
+# Flutter / Dart build outputs (雲端會自己重建，不用進版控)
+.dart_tool/
+.packages
+build/
+*.iml
+.idea/
+
+# flutter create 產生的平台骨架（CI 會即時重建）
+/android/
+/ios/
+/linux/
+/macos/
+/windows/
+/web/
+/lib/main.dart.bak
+
+# 本機產物
+*.apk
+*.aab
+photo_album_apk.zip
+
+# 系統
+.DS_Store
+Thumbs.db
+
+# Claude Code 本機設定
+.claude/
