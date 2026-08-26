@@ -17,6 +17,17 @@ dependencies:
 
 dev_dependencies:
   flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.1
 
 flutter:
   uses-material-design: true
+
+# App 圖示：把一張 1024x1024 的 PNG 放到 assets/icon/logo.png，
+# 雲端 build 會自動用它產生所有尺寸的 App 圖示。
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/icon/logo.png"
+  adaptive_icon_background: "#FFFFFF"
+  adaptive_icon_foreground: "assets/icon/logo.png"
+  min_sdk_android: 21
