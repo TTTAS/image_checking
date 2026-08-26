@@ -4,11 +4,13 @@ name: Build APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, 'claude/**' ]
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # 建立 Release 需要
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,3 +58,16 @@ jobs:
           name: photo_album_apk
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
+
+      # 把 APK 發到 Release，手機瀏覽器可直接點連結下載安裝（免登入、免解壓縮）。
+      # 固定網址：https://github.com/TTTAS/image_checking/releases/download/apk-latest/app-release.apk
+      - name: Publish APK to a Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: 最新 APK（自動建置）
+          body: |
+            由分支 `${{ github.ref_name }}` 的 commit `${{ github.sha }}` 自動建置。
+            手機直接點下面的 `app-release.apk` 即可下載安裝。
+          files: build/app/outputs/flutter-apk/app-release.apk
+          prerelease: true
