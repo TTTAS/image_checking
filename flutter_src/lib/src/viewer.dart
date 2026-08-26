@@ -52,6 +52,81 @@ class _ViewerPageState extends State<ViewerPage> {
     if (_assets.isEmpty && mounted) Navigator.of(context).pop();
   }
 
+  void _showInfo() {
+    final asset = _current;
+    showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return FutureBuilder<Map<String, String>>(
+          future: _collectInfo(asset),
+          builder: (ctx, snap) {
+            if (!snap.hasData) {
+              return const Padding(
+                padding: EdgeInsets.all(32),
+                child: Center(child: CircularProgressIndicator()),
+              );
+            }
+            final info = snap.data!;
+            return SafeArea(
+              child: ListView(
+                shrinkWrap: true,
+                children: [
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+                    child: Text(
+                      '詳細資訊',
+                      style:
+                          TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                    ),
+                  ),
+                  for (final e in info.entries)
+                    ListTile(
+                      dense: true,
+                      title: Text(e.key,
+                          style: const TextStyle(fontSize: 12)),
+                      subtitle: Text(e.value,
+                          style: const TextStyle(fontSize: 15)),
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<Map<String, String>> _collectInfo(AssetEntity a) async {
+    final file = await a.file;
+    final bytes = file != null ? await file.length() : 0;
+    final lat = a.latitude ?? 0;
+    final lng = a.longitude ?? 0;
+    return {
+      '檔名': a.title ?? '(未知)',
+      '尺寸': '${a.width} × ${a.height}',
+      '檔案大小': _formatBytes(bytes),
+      '拍攝時間': _formatDate(a.createDateTime),
+      '修改時間': _formatDate(a.modifiedDateTime),
+      '類型': a.mimeType ?? '(未知)',
+      if (lat != 0 || lng != 0)
+        '位置': '${lat.toStringAsFixed(5)}, ${lng.toStringAsFixed(5)}',
+      if ((a.relativePath ?? '').isNotEmpty) '路徑': a.relativePath!,
+    };
+  }
+
+  String _formatBytes(int bytes) {
+    if (bytes <= 0) return '未知';
+    if (bytes < 1024) return '$bytes B';
+    if (bytes < 1024 * 1024) return '${(bytes / 1024).toStringAsFixed(1)} KB';
+    return '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+  }
+
+  String _formatDate(DateTime d) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${d.year}-${two(d.month)}-${two(d.day)} ${two(d.hour)}:${two(d.minute)}';
+  }
+
   @override
   Widget build(BuildContext context) {
     if (_assets.isEmpty) return const SizedBox.shrink();
@@ -65,6 +140,13 @@ class _ViewerPageState extends State<ViewerPage> {
           style: const TextStyle(fontSize: 15),
           overflow: TextOverflow.ellipsis,
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            tooltip: '詳細資訊',
+            onPressed: _showInfo,
+          ),
+        ],
       ),
       body: PageView.builder(
         controller: _controller,
