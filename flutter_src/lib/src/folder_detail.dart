@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'collections.dart';
+import 'grid_columns.dart';
 import 'photo_grid.dart';
 import 'selection.dart';
 import 'sort.dart';
@@ -90,7 +91,8 @@ class _FolderDetailPageState extends State<FolderDetailPage> {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: Listenable.merge([_selection, AppCollections.hidden]),
+      animation: Listenable.merge(
+          [_selection, AppCollections.hidden, GridColumns.count]),
       builder: (context, _) {
         final visible = _visible;
         return Scaffold(
@@ -110,20 +112,21 @@ class _FolderDetailPageState extends State<FolderDetailPage> {
               ? const Center(child: CircularProgressIndicator())
               : visible.isEmpty
                   ? const Center(child: Text('這個資料夾沒有可顯示的照片'))
-                  : GridView.builder(
-                      padding: const EdgeInsets.all(2),
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 3,
-                        crossAxisSpacing: 2,
-                        mainAxisSpacing: 2,
-                      ),
-                      itemCount: visible.length,
-                      itemBuilder: (context, i) => SelectableThumb(
-                        assets: visible,
-                        index: i,
-                        selection: _selection,
-                        onOpen: () => _open(visible, i),
+                  : PinchColumns(
+                      child: GridView.builder(
+                        padding: const EdgeInsets.all(2),
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: GridColumns.count.value,
+                          crossAxisSpacing: 2,
+                          mainAxisSpacing: 2,
+                        ),
+                        itemCount: visible.length,
+                        itemBuilder: (context, i) => SelectableThumb(
+                          assets: visible,
+                          index: i,
+                          selection: _selection,
+                          onOpen: () => _open(visible, i),
+                        ),
                       ),
                     ),
         );

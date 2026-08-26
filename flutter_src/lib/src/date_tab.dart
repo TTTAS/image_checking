@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'collections.dart';
+import 'grid_columns.dart';
 import 'hidden_page.dart';
 import 'photo_grid.dart';
 import 'selection.dart';
@@ -97,7 +98,8 @@ class _DateTabState extends State<DateTab> {
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: Listenable.merge([_selection, AppCollections.hidden]),
+      animation: Listenable.merge(
+          [_selection, AppCollections.hidden, GridColumns.count]),
       builder: (context, _) {
         final visible = _visible;
         return Scaffold(
@@ -134,17 +136,21 @@ class _DateTabState extends State<DateTab> {
               ? const Center(child: CircularProgressIndicator())
               : visible.isEmpty
                   ? const Center(child: Text('沒有找到照片'))
-                  : _sort.groupsByDay
-                      ? _GroupedByDay(
-                          assets: visible,
-                          selection: _selection,
-                          onOpen: _open,
-                        )
-                      : _FlatGrid(
-                          assets: visible,
-                          selection: _selection,
-                          onOpen: _open,
-                        ),
+                  : PinchColumns(
+                      child: _sort.groupsByDay
+                          ? _GroupedByDay(
+                              assets: visible,
+                              columns: GridColumns.count.value,
+                              selection: _selection,
+                              onOpen: _open,
+                            )
+                          : _FlatGrid(
+                              assets: visible,
+                              columns: GridColumns.count.value,
+                              selection: _selection,
+                              onOpen: _open,
+                            ),
+                    ),
         );
       },
     );
@@ -154,11 +160,13 @@ class _DateTabState extends State<DateTab> {
 class _FlatGrid extends StatelessWidget {
   const _FlatGrid({
     required this.assets,
+    required this.columns,
     required this.selection,
     required this.onOpen,
   });
 
   final List<AssetEntity> assets;
+  final int columns;
   final SelectionController selection;
   final void Function(List<AssetEntity>, int) onOpen;
 
@@ -166,8 +174,8 @@ class _FlatGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     return GridView.builder(
       padding: const EdgeInsets.all(2),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
+      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: columns,
         crossAxisSpacing: 2,
         mainAxisSpacing: 2,
       ),
@@ -185,11 +193,13 @@ class _FlatGrid extends StatelessWidget {
 class _GroupedByDay extends StatelessWidget {
   const _GroupedByDay({
     required this.assets,
+    required this.columns,
     required this.selection,
     required this.onOpen,
   });
 
   final List<AssetEntity> assets;
+  final int columns;
   final SelectionController selection;
   final void Function(List<AssetEntity>, int) onOpen;
 
@@ -233,8 +243,8 @@ class _GroupedByDay extends StatelessWidget {
         SliverPadding(
           padding: const EdgeInsets.symmetric(horizontal: 2),
           sliver: SliverGrid(
-            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-              crossAxisCount: 3,
+            gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: columns,
               crossAxisSpacing: 2,
               mainAxisSpacing: 2,
             ),

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'collections.dart';
+import 'grid_columns.dart';
 import 'photo_grid.dart';
 import 'selection.dart';
 import 'viewer.dart';
@@ -74,6 +75,7 @@ class _FavoritesTabState extends State<FavoritesTab> {
         _selection,
         AppCollections.favorites,
         AppCollections.hidden,
+        GridColumns.count,
       ]),
       builder: (context, _) {
         final visible = _visible;
@@ -89,20 +91,21 @@ class _FavoritesTabState extends State<FavoritesTab> {
               ? const Center(child: CircularProgressIndicator())
               : visible.isEmpty
                   ? const Center(child: Text('還沒有最愛的照片\n在照片上點愛心即可加入'))
-                  : GridView.builder(
-                      padding: const EdgeInsets.all(2),
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 3,
-                        crossAxisSpacing: 2,
-                        mainAxisSpacing: 2,
-                      ),
-                      itemCount: visible.length,
-                      itemBuilder: (context, i) => SelectableThumb(
-                        assets: visible,
-                        index: i,
-                        selection: _selection,
-                        onOpen: () => _open(visible, i),
+                  : PinchColumns(
+                      child: GridView.builder(
+                        padding: const EdgeInsets.all(2),
+                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: GridColumns.count.value,
+                          crossAxisSpacing: 2,
+                          mainAxisSpacing: 2,
+                        ),
+                        itemCount: visible.length,
+                        itemBuilder: (context, i) => SelectableThumb(
+                          assets: visible,
+                          index: i,
+                          selection: _selection,
+                          onOpen: () => _open(visible, i),
+                        ),
                       ),
                     ),
         );
