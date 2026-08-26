@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'date_tab.dart';
+import 'favorites_tab.dart';
 import 'folders_tab.dart';
 
 class PhotoAlbumApp extends StatelessWidget {
@@ -110,7 +111,7 @@ class _HomeState extends State<_Home> {
   int _index = 0;
 
   // Kept alive so switching tabs does not reload the whole library each time.
-  final _pages = const [DateTab(), FoldersTab()];
+  final _pages = const [DateTab(), FoldersTab(), FavoritesTab()];
 
   @override
   Widget build(BuildContext context) {
@@ -129,6 +130,11 @@ class _HomeState extends State<_Home> {
             icon: Icon(Icons.folder_outlined),
             selectedIcon: Icon(Icons.folder),
             label: '資料夾',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.favorite_border),
+            selectedIcon: Icon(Icons.favorite),
+            label: '我的最愛',
           ),
         ],
       ),

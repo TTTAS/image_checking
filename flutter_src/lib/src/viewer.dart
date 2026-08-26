@@ -1,9 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
-import 'package:share_plus/share_plus.dart';
 
-/// Full-screen viewer: swipe between photos, pinch-zoom, share.
+import 'collections.dart';
+import 'photo_actions.dart';
+
+/// Full-screen viewer: swipe between photos, pinch-zoom, and act on a single
+/// photo (favorite / edit / share / hide / delete).
 class ViewerPage extends StatefulWidget {
   const ViewerPage({
     super.key,
@@ -20,11 +23,13 @@ class ViewerPage extends StatefulWidget {
 
 class _ViewerPageState extends State<ViewerPage> {
   late final PageController _controller;
+  late List<AssetEntity> _assets;
   late int _index;
 
   @override
   void initState() {
     super.initState();
+    _assets = List<AssetEntity>.from(widget.assets);
     _index = widget.initialIndex;
     _controller = PageController(initialPage: widget.initialIndex);
   }
@@ -35,37 +40,35 @@ class _ViewerPageState extends State<ViewerPage> {
     super.dispose();
   }
 
-  Future<void> _share() async {
-    final asset = widget.assets[_index];
-    final file = await asset.file;
-    if (file == null) return;
-    await Share.shareXFiles([XFile(file.path)]);
+  AssetEntity get _current => _assets[_index];
+
+  Future<void> _delete() async {
+    final deleted = await PhotoActions.delete([_current]);
+    if (deleted.isEmpty || !mounted) return;
+    setState(() {
+      _assets.removeAt(_index);
+      if (_index >= _assets.length) _index = _assets.length - 1;
+    });
+    if (_assets.isEmpty && mounted) Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
-    final current = widget.assets[_index];
+    if (_assets.isEmpty) return const SizedBox.shrink();
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         title: Text(
-          current.title ?? '${_index + 1} / ${widget.assets.length}',
+          _current.title ?? '${_index + 1} / ${_assets.length}',
           style: const TextStyle(fontSize: 15),
           overflow: TextOverflow.ellipsis,
         ),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.share_outlined),
-            tooltip: '分享',
-            onPressed: _share,
-          ),
-        ],
       ),
       body: PageView.builder(
         controller: _controller,
-        itemCount: widget.assets.length,
+        itemCount: _assets.length,
         onPageChanged: (i) => setState(() => _index = i),
         itemBuilder: (context, i) {
           return InteractiveViewer(
@@ -73,7 +76,7 @@ class _ViewerPageState extends State<ViewerPage> {
             maxScale: 5,
             child: Center(
               child: AssetEntityImage(
-                widget.assets[i],
+                _assets[i],
                 isOriginal: true,
                 fit: BoxFit.contain,
                 errorBuilder: (context, error, stack) => const Icon(
@@ -85,6 +88,73 @@ class _ViewerPageState extends State<ViewerPage> {
             ),
           );
         },
+      ),
+      bottomNavigationBar: AnimatedBuilder(
+        animation: Listenable.merge([
+          AppCollections.favorites,
+          AppCollections.hidden,
+        ]),
+        builder: (context, _) {
+          final id = _current.id;
+          final fav = AppCollections.isFavorite(id);
+          final hidden = AppCollections.isHidden(id);
+          return BottomAppBar(
+            color: Colors.black,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _action(
+                  icon: fav ? Icons.favorite : Icons.favorite_border,
+                  color: fav ? Colors.redAccent : Colors.white,
+                  label: '最愛',
+                  onTap: () => AppCollections.toggleFavorite(id),
+                ),
+                _action(
+                  icon: Icons.tune,
+                  label: '編輯',
+                  onTap: () => PhotoActions.openEditor(context, _current),
+                ),
+                _action(
+                  icon: Icons.share_outlined,
+                  label: '分享',
+                  onTap: () => PhotoActions.share([_current]),
+                ),
+                _action(
+                  icon: hidden ? Icons.visibility : Icons.visibility_off_outlined,
+                  label: hidden ? '取消隱藏' : '隱藏',
+                  onTap: () => AppCollections.toggleHidden(id),
+                ),
+                _action(
+                  icon: Icons.delete_outline,
+                  label: '刪除',
+                  onTap: _delete,
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _action({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+    Color color = Colors.white,
+  }) {
+    return InkWell(
+      onTap: onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: color, size: 22),
+            const SizedBox(height: 2),
+            Text(label, style: TextStyle(color: color, fontSize: 11)),
+          ],
+        ),
       ),
     );
   }
