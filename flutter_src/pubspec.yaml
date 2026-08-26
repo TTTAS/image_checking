@@ -22,12 +22,16 @@ dev_dependencies:
 flutter:
   uses-material-design: true
 
-# App 圖示：把一張 1024x1024 的 PNG 放到 assets/icon/logo.png，
-# 雲端 build 會自動用它產生所有尺寸的 App 圖示。
+# App 圖示：
+#   - logo.png            : 一般（legacy）圖示用的完整圖，山豬置中留白。
+#   - logo_foreground.png : 自適應圖示（adaptive icon）專用前景，山豬已放大填滿約
+#                           82%，用來抵銷 Android 安全區的縮放，避免山豬被縮太小。
+# 雲端 build 會自動用它們產生所有尺寸的 App 圖示。
 flutter_launcher_icons:
   android: true
   ios: false
   image_path: "assets/icon/logo.png"
-  adaptive_icon_background: "#FFFFFF"
-  adaptive_icon_foreground: "assets/icon/logo.png"
+  # 背景改成和圖片相同的綠色，adaptive icon 邊緣才不會露出白邊。
+  adaptive_icon_background: "#B6E3CE"
+  adaptive_icon_foreground: "assets/icon/logo_foreground.png"
   min_sdk_android: 21
