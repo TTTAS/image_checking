@@ -35,10 +35,10 @@ class PhotoActions {
   /// Saves an edited image as a NEW file in the "PhotoAlbumEdits" album.
   /// The original is never modified.
   static Future<AssetEntity?> saveEdited(Uint8List bytes) async {
-    final title = 'edit_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final name = 'edit_${DateTime.now().millisecondsSinceEpoch}.jpg';
     return PhotoManager.editor.saveImage(
       bytes,
-      title: title,
+      filename: name,
       relativePath: 'Pictures/PhotoAlbumEdits',
     );
   }
@@ -65,7 +65,7 @@ class PhotoActions {
                 ),
               );
             },
-            onCloseEditor: () => Navigator.of(ctx).pop(),
+            onCloseEditor: (mode) => Navigator.of(ctx).pop(),
           ),
         ),
       ),
