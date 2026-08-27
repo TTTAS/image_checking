@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'collections.dart';
 import 'folder_covers.dart';
 import 'folder_detail.dart';
+import 'folder_names.dart';
 import 'photo_actions.dart';
 import 'selection.dart';
 import 'widgets.dart';
@@ -54,12 +55,14 @@ class _FoldersTabState extends State<FoldersTab> {
   void initState() {
     super.initState();
     FolderCovers.map.addListener(_onCoversChanged);
+    FolderNames.map.addListener(_rebuild);
     _init();
   }
 
   @override
   void dispose() {
     FolderCovers.map.removeListener(_onCoversChanged);
+    FolderNames.map.removeListener(_rebuild);
     _selection.dispose();
     super.dispose();
   }
@@ -67,6 +70,11 @@ class _FoldersTabState extends State<FoldersTab> {
   /// A cover was set/cleared elsewhere: drop the cache so covers reload.
   void _onCoversChanged() {
     _coverCache.clear();
+    if (mounted) setState(() {});
+  }
+
+  /// A custom folder name changed elsewhere: just repaint the labels.
+  void _rebuild() {
     if (mounted) setState(() {});
   }
 
@@ -344,6 +352,7 @@ class _FoldersTabState extends State<FoldersTab> {
                           count: folder.count,
                           coverLoader: () => _cover(folder.path),
                           selection: _selection,
+                          onReturn: _reload,
                         );
                       },
                     ),
@@ -359,12 +368,14 @@ class _FolderCard extends StatelessWidget {
     required this.count,
     required this.coverLoader,
     required this.selection,
+    required this.onReturn,
   });
 
   final AssetPathEntity folder;
   final int count;
   final Future<AssetEntity?> Function() coverLoader;
   final SelectionController selection;
+  final Future<void> Function() onReturn;
 
   @override
   Widget build(BuildContext context) {
@@ -372,11 +383,11 @@ class _FolderCard extends StatelessWidget {
     return GestureDetector(
       onTap: selection.active
           ? () => selection.toggle(folder.id)
-          : () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => FolderDetailPage(folder: folder),
-                ),
-              ),
+          : () => Navigator.of(context)
+              .push(MaterialPageRoute(
+                builder: (_) => FolderDetailPage(folder: folder),
+              ))
+              .then((_) => onReturn()),
       onLongPress: () => selection.enter(folder.id),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -423,7 +434,7 @@ class _FolderCard extends StatelessWidget {
           ),
           const SizedBox(height: 6),
           Text(
-            folder.name,
+            FolderNames.nameOf(folder.id) ?? folder.name,
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontWeight: FontWeight.w500),

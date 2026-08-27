@@ -37,9 +37,19 @@ jobs:
 
       - name: Inject photo-library permissions
         run: |
-          perl -0pi -e 's/(<manifest[^>]*>)/$1\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" \/>\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" \/>\n    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" \/>/' android/app/src/main/AndroidManifest.xml
+          perl -0pi -e 's/(<manifest[^>]*>)/$1\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" \/>\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" \/>\n    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" \/>\n    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" \/>/' android/app/src/main/AndroidManifest.xml
           echo "----- AndroidManifest.xml -----"
           cat android/app/src/main/AndroidManifest.xml
+
+      - name: Inject native folder-rename code
+        run: |
+          GEN=$(find android/app/src/main -name MainActivity.kt | head -1)
+          echo "generated MainActivity: $GEN"
+          PKG=$(grep -m1 '^package ' "$GEN" | sed 's/^package //; s/[[:space:]]*$//')
+          echo "package: $PKG"
+          sed "s/__PACKAGE__/$PKG/" flutter_src/native/MainActivity.kt > "$GEN"
+          echo "----- MainActivity.kt -----"
+          cat "$GEN"
 
       - name: Build release APK
         run: |
