@@ -3,6 +3,7 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'collections.dart';
+import 'folder_covers.dart';
 import 'folder_detail.dart';
 import 'photo_actions.dart';
 import 'selection.dart';
@@ -52,13 +53,21 @@ class _FoldersTabState extends State<FoldersTab> {
   @override
   void initState() {
     super.initState();
+    FolderCovers.map.addListener(_onCoversChanged);
     _init();
   }
 
   @override
   void dispose() {
+    FolderCovers.map.removeListener(_onCoversChanged);
     _selection.dispose();
     super.dispose();
+  }
+
+  /// A cover was set/cleared elsewhere: drop the cache so covers reload.
+  void _onCoversChanged() {
+    _coverCache.clear();
+    if (mounted) setState(() {});
   }
 
   Future<void> _init() async {
@@ -112,14 +121,29 @@ class _FoldersTabState extends State<FoldersTab> {
     return list;
   }
 
-  /// First photo of a folder ordered by filename A→Z, used as the cover.
+  /// The folder's cover: the user-chosen photo if one is set, otherwise the
+  /// first photo ordered by filename A→Z.
   Future<AssetEntity?> _cover(AssetPathEntity path) async {
     if (_coverCache.containsKey(path.id)) return _coverCache[path.id];
     final count = await path.assetCountAsync;
     final assets = await path.getAssetListRange(start: 0, end: count);
-    assets.sort((a, b) =>
-        (a.title ?? '').toLowerCase().compareTo((b.title ?? '').toLowerCase()));
-    final cover = assets.isEmpty ? null : assets.first;
+
+    AssetEntity? cover;
+    final chosenId = FolderCovers.coverOf(path.id);
+    if (chosenId != null) {
+      for (final a in assets) {
+        if (a.id == chosenId) {
+          cover = a;
+          break;
+        }
+      }
+    }
+    if (cover == null) {
+      assets.sort((a, b) => (a.title ?? '')
+          .toLowerCase()
+          .compareTo((b.title ?? '').toLowerCase()));
+      cover = assets.isEmpty ? null : assets.first;
+    }
     _coverCache[path.id] = cover;
     return cover;
   }
