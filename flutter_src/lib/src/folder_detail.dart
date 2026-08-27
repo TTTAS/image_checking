@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'collections.dart';
+import 'folder_covers.dart';
 import 'grid_columns.dart';
 import 'photo_grid.dart';
 import 'selection.dart';
@@ -29,6 +30,7 @@ class _FolderDetailPageState extends State<FolderDetailPage> {
   Map<String, int> _sizes = {};
   SortOption _sort = _fallback;
   bool _loading = true;
+  bool _pickingCover = false;
 
   @override
   void initState() {
@@ -88,6 +90,60 @@ class _FolderDetailPageState extends State<FolderDetailPage> {
         .then((_) => _reload());
   }
 
+  Future<void> _setCover(AssetEntity asset) async {
+    await FolderCovers.set(widget.folder.id, asset.id);
+    if (!mounted) return;
+    setState(() => _pickingCover = false);
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('已設為資料夾封面')));
+  }
+
+  Future<void> _clearCover() async {
+    await FolderCovers.clear(widget.folder.id);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+        .showSnackBar(const SnackBar(content: Text('已恢復預設封面')));
+  }
+
+  PreferredSizeWidget _appBar(List<AssetEntity> visible) {
+    if (_selection.active) {
+      return selectionAppBar(
+        selection: _selection,
+        all: visible,
+        reload: _reload,
+      );
+    }
+    if (_pickingCover) {
+      return AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.close),
+          onPressed: () => setState(() => _pickingCover = false),
+        ),
+        title: const Text('點一張照片設為封面'),
+      );
+    }
+    return AppBar(
+      title: Text(widget.folder.name),
+      actions: [
+        SortMenuButton(current: _sort, onSelected: _changeSort),
+        PopupMenuButton<String>(
+          onSelected: (v) {
+            if (v == 'set') {
+              setState(() => _pickingCover = true);
+            } else if (v == 'clear') {
+              _clearCover();
+            }
+          },
+          itemBuilder: (context) => [
+            const PopupMenuItem(value: 'set', child: Text('設定封面照片')),
+            if (FolderCovers.coverOf(widget.folder.id) != null)
+              const PopupMenuItem(value: 'clear', child: Text('恢復預設封面')),
+          ],
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
@@ -96,38 +152,46 @@ class _FolderDetailPageState extends State<FolderDetailPage> {
       builder: (context, _) {
         final visible = _visible;
         return Scaffold(
-          appBar: _selection.active
-              ? selectionAppBar(
-                  selection: _selection,
-                  all: visible,
-                  reload: _reload,
-                )
-              : AppBar(
-                  title: Text(widget.folder.name),
-                  actions: [
-                    SortMenuButton(current: _sort, onSelected: _changeSort),
-                  ],
-                ),
+          appBar: _appBar(visible),
           body: _loading
               ? const Center(child: CircularProgressIndicator())
               : visible.isEmpty
                   ? const Center(child: Text('這個資料夾沒有可顯示的照片'))
-                  : PinchColumns(
-                      child: GridView.builder(
-                        padding: const EdgeInsets.all(2),
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: GridColumns.count.value,
-                          crossAxisSpacing: 2,
-                          mainAxisSpacing: 2,
+                  : Column(
+                      children: [
+                        if (_pickingCover)
+                          Container(
+                            width: double.infinity,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .secondaryContainer,
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 12, vertical: 8),
+                            child: const Text('選一張照片作為這個資料夾的封面'),
+                          ),
+                        Expanded(
+                          child: PinchColumns(
+                            child: GridView.builder(
+                              padding: const EdgeInsets.all(2),
+                              gridDelegate:
+                                  SliverGridDelegateWithFixedCrossAxisCount(
+                                crossAxisCount: GridColumns.count.value,
+                                crossAxisSpacing: 2,
+                                mainAxisSpacing: 2,
+                              ),
+                              itemCount: visible.length,
+                              itemBuilder: (context, i) => SelectableThumb(
+                                assets: visible,
+                                index: i,
+                                selection: _selection,
+                                onOpen: () => _pickingCover
+                                    ? _setCover(visible[i])
+                                    : _open(visible, i),
+                              ),
+                            ),
+                          ),
                         ),
-                        itemCount: visible.length,
-                        itemBuilder: (context, i) => SelectableThumb(
-                          assets: visible,
-                          index: i,
-                          selection: _selection,
-                          onOpen: () => _open(visible, i),
-                        ),
-                      ),
+                      ],
                     ),
         );
       },
