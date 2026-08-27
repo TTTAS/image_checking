@@ -352,6 +352,7 @@ class _FoldersTabState extends State<FoldersTab> {
                           count: folder.count,
                           coverLoader: () => _cover(folder.path),
                           selection: _selection,
+                          onReturn: _reload,
                         );
                       },
                     ),
@@ -367,12 +368,14 @@ class _FolderCard extends StatelessWidget {
     required this.count,
     required this.coverLoader,
     required this.selection,
+    required this.onReturn,
   });
 
   final AssetPathEntity folder;
   final int count;
   final Future<AssetEntity?> Function() coverLoader;
   final SelectionController selection;
+  final Future<void> Function() onReturn;
 
   @override
   Widget build(BuildContext context) {
@@ -380,11 +383,11 @@ class _FolderCard extends StatelessWidget {
     return GestureDetector(
       onTap: selection.active
           ? () => selection.toggle(folder.id)
-          : () => Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => FolderDetailPage(folder: folder),
-                ),
-              ),
+          : () => Navigator.of(context)
+              .push(MaterialPageRoute(
+                builder: (_) => FolderDetailPage(folder: folder),
+              ))
+              .then((_) => onReturn()),
       onLongPress: () => selection.enter(folder.id),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
