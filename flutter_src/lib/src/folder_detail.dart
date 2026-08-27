@@ -3,6 +3,7 @@ import 'package:photo_manager/photo_manager.dart';
 
 import 'collections.dart';
 import 'folder_covers.dart';
+import 'folder_names.dart';
 import 'grid_columns.dart';
 import 'photo_grid.dart';
 import 'selection.dart';
@@ -105,6 +106,43 @@ class _FolderDetailPageState extends State<FolderDetailPage> {
         .showSnackBar(const SnackBar(content: Text('已恢復預設封面')));
   }
 
+  Future<void> _rename() async {
+    final controller = TextEditingController(
+      text: FolderNames.nameOf(widget.folder.id) ?? widget.folder.name,
+    );
+    final name = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('重新命名資料夾'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: const InputDecoration(hintText: '輸入顯示名稱'),
+          onSubmitted: (v) => Navigator.of(ctx).pop(v),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('取消'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(controller.text),
+            child: const Text('確定'),
+          ),
+        ],
+      ),
+    );
+    if (name == null) return;
+    final trimmed = name.trim();
+    // Empty or same as the real folder name → drop the custom alias.
+    if (trimmed.isEmpty || trimmed == widget.folder.name) {
+      await FolderNames.clear(widget.folder.id);
+    } else {
+      await FolderNames.set(widget.folder.id, trimmed);
+    }
+    if (mounted) setState(() {});
+  }
+
   PreferredSizeWidget _appBar(List<AssetEntity> visible) {
     if (_selection.active) {
       return selectionAppBar(
@@ -123,18 +161,21 @@ class _FolderDetailPageState extends State<FolderDetailPage> {
       );
     }
     return AppBar(
-      title: Text(widget.folder.name),
+      title: Text(FolderNames.nameOf(widget.folder.id) ?? widget.folder.name),
       actions: [
         SortMenuButton(current: _sort, onSelected: _changeSort),
         PopupMenuButton<String>(
           onSelected: (v) {
-            if (v == 'set') {
+            if (v == 'rename') {
+              _rename();
+            } else if (v == 'set') {
               setState(() => _pickingCover = true);
             } else if (v == 'clear') {
               _clearCover();
             }
           },
           itemBuilder: (context) => [
+            const PopupMenuItem(value: 'rename', child: Text('重新命名')),
             const PopupMenuItem(value: 'set', child: Text('設定封面照片')),
             if (FolderCovers.coverOf(widget.folder.id) != null)
               const PopupMenuItem(value: 'clear', child: Text('恢復預設封面')),
