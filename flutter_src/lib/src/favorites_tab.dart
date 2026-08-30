@@ -3,6 +3,7 @@ import 'package:photo_manager/photo_manager.dart';
 
 import 'collections.dart';
 import 'grid_columns.dart';
+import 'media.dart';
 import 'photo_grid.dart';
 import 'selection.dart';
 import 'viewer.dart';
@@ -36,7 +37,7 @@ class _FavoritesTabState extends State<FavoritesTab> {
     setState(() => _loading = true);
     final paths = await PhotoManager.getAssetPathList(
       onlyAll: true,
-      type: RequestType.image,
+      type: kMediaType,
     );
     var assets = <AssetEntity>[];
     if (paths.isNotEmpty) {

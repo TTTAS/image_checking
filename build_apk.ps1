@@ -111,12 +111,21 @@ if ($xml -notmatch 'READ_MEDIA_IMAGES') {
   $perm = @"
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
 "@
   $xml = $xml -replace '(<manifest[^>]*>)', "`$1`r`n$perm"
   $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
   [System.IO.File]::WriteAllText($manifest, $xml, $utf8NoBom)
   Write-Host '已注入相片庫權限。'
+}
+elseif ($xml -notmatch 'READ_MEDIA_VIDEO') {
+  # 舊的 android 骨架已有相片權限，但缺影片權限：補上 READ_MEDIA_VIDEO。
+  $xml = $xml -replace '(<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />)',
+    "`$1`r`n    <uses-permission android:name=`"android.permission.READ_MEDIA_VIDEO`" />"
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  [System.IO.File]::WriteAllText($manifest, $xml, $utf8NoBom)
+  Write-Host '已補上影片讀取權限。'
 }
 
 # ---------------------------------------------------------------------------

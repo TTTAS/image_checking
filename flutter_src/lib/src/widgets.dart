@@ -43,16 +43,23 @@ class SortMenuButton extends StatelessWidget {
   }
 }
 
-/// A single square thumbnail for a photo.
+/// A single square thumbnail for a photo. Videos get a play icon + duration
+/// badge so they stand out in the grid.
 class PhotoThumb extends StatelessWidget {
-  const PhotoThumb({super.key, required this.asset, this.side = 200});
+  const PhotoThumb({
+    super.key,
+    required this.asset,
+    this.side = 200,
+    this.showVideoBadge = true,
+  });
 
   final AssetEntity asset;
   final int side;
+  final bool showVideoBadge;
 
   @override
   Widget build(BuildContext context) {
-    return AssetEntityImage(
+    final image = AssetEntityImage(
       asset,
       isOriginal: false,
       thumbnailSize: ThumbnailSize.square(side),
@@ -64,7 +71,45 @@ class PhotoThumb extends StatelessWidget {
         child: const Icon(Icons.broken_image_outlined, size: 20),
       ),
     );
+    if (!showVideoBadge || asset.type != AssetType.video) return image;
+    return Stack(
+      fit: StackFit.expand,
+      children: [
+        image,
+        Positioned(
+          right: 4,
+          top: 4,
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.play_circle_fill,
+                  size: 15, color: Colors.white),
+              const SizedBox(width: 2),
+              Text(
+                _formatDuration(asset.videoDuration),
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 11,
+                  fontWeight: FontWeight.w600,
+                  shadows: [Shadow(blurRadius: 3, color: Colors.black)],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
+}
+
+/// Formats a video length as m:ss (or h:mm:ss for long clips).
+String _formatDuration(Duration d) {
+  String two(int n) => n.toString().padLeft(2, '0');
+  final h = d.inHours;
+  final m = d.inMinutes.remainder(60);
+  final s = d.inSeconds.remainder(60);
+  if (h > 0) return '$h:${two(m)}:${two(s)}';
+  return '$m:${two(s)}';
 }
 
 /// Loads byte sizes for a set of assets (needed only for size sorting).

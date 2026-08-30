@@ -251,6 +251,11 @@ class _FolderDetailPageState extends State<FolderDetailPage> {
     return AppBar(
       title: Text(FolderNames.nameOf(widget.folder.id) ?? widget.folder.name),
       actions: [
+        IconButton(
+          icon: const Icon(Icons.add_photo_alternate_outlined),
+          tooltip: '設定封面照片',
+          onPressed: () => setState(() => _pickingCover = true),
+        ),
         SortMenuButton(current: _sort, onSelected: _changeSort),
         PopupMenuButton<String>(
           onSelected: (v) {
