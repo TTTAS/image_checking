@@ -2,7 +2,6 @@ package __PACKAGE__
 
 import android.app.WallpaperManager
 import android.content.Intent
-import android.graphics.BitmapFactory
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
@@ -42,12 +41,11 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "setWallpaper" -> {
-                        val path = call.argument<String>("path")
-                        val target = call.argument<String>("target") ?: "both"
-                        if (path == null) {
-                            result.error("ARGS", "path required", null)
+                        val uri = call.argument<String>("uri")
+                        if (uri == null) {
+                            result.error("ARGS", "uri required", null)
                         } else {
-                            setWallpaper(path, target, result)
+                            setWallpaper(uri, result)
                         }
                     }
                     else -> result.notImplemented()
@@ -74,36 +72,32 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /// Decodes the image at [path] and sets it as the wallpaper. [target] is
-    /// "home", "lock", or "both". Needs only the (auto-granted) SET_WALLPAPER
-    /// permission.
-    private fun setWallpaper(path: String, target: String, result: MethodChannel.Result) {
+    /// Opens the system "crop & set wallpaper" screen for the image at [uriString]
+    /// so the user can position/crop and pick which screen before applying.
+    private fun setWallpaper(uriString: String, result: MethodChannel.Result) {
         try {
-            val file = File(path)
-            if (!file.exists()) {
-                result.error("NOT_FOUND", "檔案不存在: $path", null)
-                return
-            }
-            val bitmap = BitmapFactory.decodeFile(path)
-            if (bitmap == null) {
-                result.error("DECODE", "無法讀取圖片", null)
-                return
-            }
+            val uri = Uri.parse(uriString)
             val wm = WallpaperManager.getInstance(applicationContext)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                val which = when (target) {
-                    "home" -> WallpaperManager.FLAG_SYSTEM
-                    "lock" -> WallpaperManager.FLAG_LOCK
-                    else -> WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
-                }
-                wm.setBitmap(bitmap, null, true, which)
-            } else {
-                // Pre-N can only set the (shared) system wallpaper.
-                wm.setBitmap(bitmap)
-            }
+            val intent = wm.getCropAndSetWallpaperIntent(uri)
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(intent)
             result.success(true)
         } catch (e: Exception) {
-            result.error("EXCEPTION", e.message, null)
+            // Some devices lack a wallpaper cropper: fall back to the plain
+            // "set as" chooser so the user can still apply it as wallpaper.
+            try {
+                val uri = Uri.parse(uriString)
+                val fallback = Intent(Intent.ACTION_ATTACH_DATA).apply {
+                    addCategory(Intent.CATEGORY_DEFAULT)
+                    setDataAndType(uri, "image/*")
+                    putExtra("mimeType", "image/*")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(fallback, "設為桌布"))
+                result.success(true)
+            } catch (e2: Exception) {
+                result.error("EXCEPTION", e2.message ?: e.message, null)
+            }
         }
     }
 

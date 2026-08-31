@@ -101,49 +101,16 @@ class _ViewerPageState extends State<ViewerPage> {
   }
 
   Future<void> _setWallpaper() async {
-    final asset = _current;
-    final target = await showModalBottomSheet<WallpaperTarget>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
-              child: Text('設為桌布',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-            ),
-            ListTile(
-              leading: const Icon(Icons.home_outlined),
-              title: const Text('主畫面'),
-              onTap: () => Navigator.of(ctx).pop(WallpaperTarget.home),
-            ),
-            ListTile(
-              leading: const Icon(Icons.lock_outline),
-              title: const Text('鎖定畫面'),
-              onTap: () => Navigator.of(ctx).pop(WallpaperTarget.lock),
-            ),
-            ListTile(
-              leading: const Icon(Icons.smartphone_outlined),
-              title: const Text('主畫面與鎖定畫面'),
-              onTap: () => Navigator.of(ctx).pop(WallpaperTarget.both),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (target == null || !mounted) return;
-
     final messenger = ScaffoldMessenger.of(context);
-    final file = await asset.file;
-    if (file == null) {
-      messenger.showSnackBar(const SnackBar(content: Text('找不到原始圖片檔案')));
+    final uri = await _current.getMediaUrl();
+    if (uri == null) {
+      messenger.showSnackBar(const SnackBar(content: Text('找不到原始圖片')));
       return;
     }
     try {
-      await NativeWallpaper.set(file.path, target);
-      messenger.showSnackBar(const SnackBar(content: Text('已設為桌布')));
+      // Opens the system cropper, where the user positions the image and
+      // chooses which screen before confirming.
+      await NativeWallpaper.setFromUri(uri);
     } on PlatformException catch (e) {
       messenger.showSnackBar(
           SnackBar(content: Text('設定桌布失敗：${e.message ?? e.code}')));
