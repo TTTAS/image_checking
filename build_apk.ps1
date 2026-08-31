@@ -113,6 +113,7 @@ if ($xml -notmatch 'READ_MEDIA_IMAGES') {
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
 "@
   $xml = $xml -replace '(<manifest[^>]*>)', "`$1`r`n$perm"
   $utf8NoBom = New-Object System.Text.UTF8Encoding($false)

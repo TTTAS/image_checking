@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:video_player/video_player.dart';
 
 import 'collections.dart';
+import 'native_wallpaper.dart';
 import 'photo_actions.dart';
 
 /// Full-screen viewer: swipe between photos, pinch-zoom, and act on a single
@@ -98,6 +100,56 @@ class _ViewerPageState extends State<ViewerPage> {
     );
   }
 
+  Future<void> _setWallpaper() async {
+    final asset = _current;
+    final target = await showModalBottomSheet<WallpaperTarget>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+              child: Text('設為桌布',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.home_outlined),
+              title: const Text('主畫面'),
+              onTap: () => Navigator.of(ctx).pop(WallpaperTarget.home),
+            ),
+            ListTile(
+              leading: const Icon(Icons.lock_outline),
+              title: const Text('鎖定畫面'),
+              onTap: () => Navigator.of(ctx).pop(WallpaperTarget.lock),
+            ),
+            ListTile(
+              leading: const Icon(Icons.smartphone_outlined),
+              title: const Text('主畫面與鎖定畫面'),
+              onTap: () => Navigator.of(ctx).pop(WallpaperTarget.both),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (target == null || !mounted) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final file = await asset.file;
+    if (file == null) {
+      messenger.showSnackBar(const SnackBar(content: Text('找不到原始圖片檔案')));
+      return;
+    }
+    try {
+      await NativeWallpaper.set(file.path, target);
+      messenger.showSnackBar(const SnackBar(content: Text('已設為桌布')));
+    } on PlatformException catch (e) {
+      messenger.showSnackBar(
+          SnackBar(content: Text('設定桌布失敗：${e.message ?? e.code}')));
+    }
+  }
+
   Future<Map<String, String>> _collectInfo(AssetEntity a) async {
     final file = await a.file;
     final bytes = file != null ? await file.length() : 0;
@@ -142,6 +194,12 @@ class _ViewerPageState extends State<ViewerPage> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
+          if (_current.type != AssetType.video)
+            IconButton(
+              icon: const Icon(Icons.wallpaper),
+              tooltip: '設為桌布',
+              onPressed: _setWallpaper,
+            ),
           IconButton(
             icon: const Icon(Icons.info_outline),
             tooltip: '詳細資訊',

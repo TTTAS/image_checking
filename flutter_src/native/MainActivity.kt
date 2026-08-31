@@ -1,6 +1,8 @@
 package __PACKAGE__
 
+import android.app.WallpaperManager
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
@@ -39,6 +41,15 @@ class MainActivity : FlutterActivity() {
                             renameFolder(oldPath, newName, result)
                         }
                     }
+                    "setWallpaper" -> {
+                        val path = call.argument<String>("path")
+                        val target = call.argument<String>("target") ?: "both"
+                        if (path == null) {
+                            result.error("ARGS", "path required", null)
+                        } else {
+                            setWallpaper(path, target, result)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -60,6 +71,39 @@ class MainActivity : FlutterActivity() {
             startActivity(intent)
         } catch (e: Exception) {
             startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        }
+    }
+
+    /// Decodes the image at [path] and sets it as the wallpaper. [target] is
+    /// "home", "lock", or "both". Needs only the (auto-granted) SET_WALLPAPER
+    /// permission.
+    private fun setWallpaper(path: String, target: String, result: MethodChannel.Result) {
+        try {
+            val file = File(path)
+            if (!file.exists()) {
+                result.error("NOT_FOUND", "檔案不存在: $path", null)
+                return
+            }
+            val bitmap = BitmapFactory.decodeFile(path)
+            if (bitmap == null) {
+                result.error("DECODE", "無法讀取圖片", null)
+                return
+            }
+            val wm = WallpaperManager.getInstance(applicationContext)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val which = when (target) {
+                    "home" -> WallpaperManager.FLAG_SYSTEM
+                    "lock" -> WallpaperManager.FLAG_LOCK
+                    else -> WallpaperManager.FLAG_SYSTEM or WallpaperManager.FLAG_LOCK
+                }
+                wm.setBitmap(bitmap, null, true, which)
+            } else {
+                // Pre-N can only set the (shared) system wallpaper.
+                wm.setBitmap(bitmap)
+            }
+            result.success(true)
+        } catch (e: Exception) {
+            result.error("EXCEPTION", e.message, null)
         }
     }
 
