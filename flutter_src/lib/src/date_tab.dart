@@ -4,6 +4,7 @@ import 'package:photo_manager/photo_manager.dart';
 import 'collections.dart';
 import 'grid_columns.dart';
 import 'hidden_page.dart';
+import 'media.dart';
 import 'photo_grid.dart';
 import 'selection.dart';
 import 'sort.dart';
@@ -50,7 +51,7 @@ class _DateTabState extends State<DateTab> {
     setState(() => _loading = true);
     final paths = await PhotoManager.getAssetPathList(
       onlyAll: true,
-      type: RequestType.image,
+      type: kMediaType,
     );
     var assets = <AssetEntity>[];
     if (paths.isNotEmpty) {

@@ -1,8 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
+import 'package:video_player/video_player.dart';
 
 import 'collections.dart';
+import 'native_wallpaper.dart';
 import 'photo_actions.dart';
 
 /// Full-screen viewer: swipe between photos, pinch-zoom, and act on a single
@@ -97,6 +100,23 @@ class _ViewerPageState extends State<ViewerPage> {
     );
   }
 
+  Future<void> _setWallpaper() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final uri = await _current.getMediaUrl();
+    if (uri == null) {
+      messenger.showSnackBar(const SnackBar(content: Text('找不到原始圖片')));
+      return;
+    }
+    try {
+      // Opens the system cropper, where the user positions the image and
+      // chooses which screen before confirming.
+      await NativeWallpaper.setFromUri(uri);
+    } on PlatformException catch (e) {
+      messenger.showSnackBar(
+          SnackBar(content: Text('設定桌布失敗：${e.message ?? e.code}')));
+    }
+  }
+
   Future<Map<String, String>> _collectInfo(AssetEntity a) async {
     final file = await a.file;
     final bytes = file != null ? await file.length() : 0;
@@ -141,6 +161,12 @@ class _ViewerPageState extends State<ViewerPage> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
+          if (_current.type != AssetType.video)
+            IconButton(
+              icon: const Icon(Icons.wallpaper),
+              tooltip: '設為桌布',
+              onPressed: _setWallpaper,
+            ),
           IconButton(
             icon: const Icon(Icons.info_outline),
             tooltip: '詳細資訊',
@@ -153,12 +179,16 @@ class _ViewerPageState extends State<ViewerPage> {
         itemCount: _assets.length,
         onPageChanged: (i) => setState(() => _index = i),
         itemBuilder: (context, i) {
+          final asset = _assets[i];
+          if (asset.type == AssetType.video) {
+            return _VideoView(key: ValueKey(asset.id), asset: asset);
+          }
           return InteractiveViewer(
             minScale: 1,
             maxScale: 5,
             child: Center(
               child: AssetEntityImage(
-                _assets[i],
+                asset,
                 isOriginal: true,
                 fit: BoxFit.contain,
                 errorBuilder: (context, error, stack) => const Icon(
@@ -191,11 +221,12 @@ class _ViewerPageState extends State<ViewerPage> {
                   label: '最愛',
                   onTap: () => AppCollections.toggleFavorite(id),
                 ),
-                _action(
-                  icon: Icons.tune,
-                  label: '編輯',
-                  onTap: () => PhotoActions.openEditor(context, _current),
-                ),
+                if (_current.type != AssetType.video)
+                  _action(
+                    icon: Icons.tune,
+                    label: '編輯',
+                    onTap: () => PhotoActions.openEditor(context, _current),
+                  ),
                 _action(
                   icon: Icons.share_outlined,
                   label: '分享',
@@ -237,6 +268,105 @@ class _ViewerPageState extends State<ViewerPage> {
             Text(label, style: TextStyle(color: color, fontSize: 11)),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Plays a single video inside the viewer: tap to play/pause, with a scrub bar.
+class _VideoView extends StatefulWidget {
+  const _VideoView({super.key, required this.asset});
+
+  final AssetEntity asset;
+
+  @override
+  State<_VideoView> createState() => _VideoViewState();
+}
+
+class _VideoViewState extends State<_VideoView> {
+  VideoPlayerController? _controller;
+  bool _error = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    try {
+      final file = await widget.asset.file;
+      if (file == null) {
+        if (mounted) setState(() => _error = true);
+        return;
+      }
+      final c = VideoPlayerController.file(file);
+      await c.initialize();
+      await c.setLooping(true);
+      if (!mounted) {
+        await c.dispose();
+        return;
+      }
+      setState(() => _controller = c);
+    } catch (_) {
+      if (mounted) setState(() => _error = true);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  void _togglePlay() {
+    final c = _controller;
+    if (c == null) return;
+    if (c.value.isPlaying) {
+      c.pause();
+    } else {
+      c.play();
+    }
+    setState(() {});
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_error) {
+      return const Center(
+        child: Icon(Icons.videocam_off_outlined,
+            color: Colors.white54, size: 48),
+      );
+    }
+    final c = _controller;
+    if (c == null || !c.value.isInitialized) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    return GestureDetector(
+      onTap: _togglePlay,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          Center(
+            child: AspectRatio(
+              aspectRatio: c.value.aspectRatio,
+              child: VideoPlayer(c),
+            ),
+          ),
+          if (!c.value.isPlaying)
+            const Icon(Icons.play_circle_fill,
+                size: 64, color: Colors.white70),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: VideoProgressIndicator(
+              c,
+              allowScrubbing: true,
+              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
+            ),
+          ),
+        ],
       ),
     );
   }

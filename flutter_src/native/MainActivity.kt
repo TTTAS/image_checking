@@ -1,5 +1,6 @@
 package __PACKAGE__
 
+import android.app.WallpaperManager
 import android.content.Intent
 import android.media.MediaScannerConnection
 import android.net.Uri
@@ -39,6 +40,14 @@ class MainActivity : FlutterActivity() {
                             renameFolder(oldPath, newName, result)
                         }
                     }
+                    "setWallpaper" -> {
+                        val uri = call.argument<String>("uri")
+                        if (uri == null) {
+                            result.error("ARGS", "uri required", null)
+                        } else {
+                            setWallpaper(uri, result)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -60,6 +69,35 @@ class MainActivity : FlutterActivity() {
             startActivity(intent)
         } catch (e: Exception) {
             startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        }
+    }
+
+    /// Opens the system "crop & set wallpaper" screen for the image at [uriString]
+    /// so the user can position/crop and pick which screen before applying.
+    private fun setWallpaper(uriString: String, result: MethodChannel.Result) {
+        try {
+            val uri = Uri.parse(uriString)
+            val wm = WallpaperManager.getInstance(applicationContext)
+            val intent = wm.getCropAndSetWallpaperIntent(uri)
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            startActivity(intent)
+            result.success(true)
+        } catch (e: Exception) {
+            // Some devices lack a wallpaper cropper: fall back to the plain
+            // "set as" chooser so the user can still apply it as wallpaper.
+            try {
+                val uri = Uri.parse(uriString)
+                val fallback = Intent(Intent.ACTION_ATTACH_DATA).apply {
+                    addCategory(Intent.CATEGORY_DEFAULT)
+                    setDataAndType(uri, "image/*")
+                    putExtra("mimeType", "image/*")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                }
+                startActivity(Intent.createChooser(fallback, "設為桌布"))
+                result.success(true)
+            } catch (e2: Exception) {
+                result.error("EXCEPTION", e2.message ?: e.message, null)
+            }
         }
     }
 

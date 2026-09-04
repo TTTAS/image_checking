@@ -6,6 +6,7 @@ import 'collections.dart';
 import 'folder_covers.dart';
 import 'folder_detail.dart';
 import 'folder_names.dart';
+import 'media.dart';
 import 'photo_actions.dart';
 import 'selection.dart';
 import 'widgets.dart';
@@ -44,9 +45,12 @@ class _FoldersTabState extends State<FoldersTab> {
   static const _prefsKey = 'sort.folders_list';
 
   final SelectionController _selection = SelectionController();
+  final TextEditingController _searchCtrl = TextEditingController();
   List<_Folder> _folders = [];
   FolderSort _sort = FolderSort.nameAsc;
   bool _loading = true;
+  bool _searching = false;
+  String _query = '';
 
   // Cache: bucket id -> its cover asset (first photo by filename).
   final Map<String, AssetEntity?> _coverCache = {};
@@ -63,6 +67,7 @@ class _FoldersTabState extends State<FoldersTab> {
   void dispose() {
     FolderCovers.map.removeListener(_onCoversChanged);
     FolderNames.map.removeListener(_rebuild);
+    _searchCtrl.dispose();
     _selection.dispose();
     super.dispose();
   }
@@ -87,10 +92,13 @@ class _FoldersTabState extends State<FoldersTab> {
     await _reload();
   }
 
-  Future<void> _reload() async {
-    setState(() => _loading = true);
+  /// Reloads the folder list. When [showSpinner] is false the current grid
+  /// stays on screen while data refreshes in the background — this keeps the
+  /// scroll position when returning from a folder instead of jumping to the top.
+  Future<void> _reload({bool showSpinner = true}) async {
+    if (showSpinner) setState(() => _loading = true);
     final paths = await PhotoManager.getAssetPathList(
-      type: RequestType.image,
+      type: kMediaType,
       hasAll: false,
     );
     final folders = <_Folder>[];
@@ -112,8 +120,28 @@ class _FoldersTabState extends State<FoldersTab> {
     setState(() => _sort = s);
   }
 
+  void _startSearch() => setState(() => _searching = true);
+
+  void _stopSearch() {
+    _searchCtrl.clear();
+    setState(() {
+      _searching = false;
+      _query = '';
+    });
+  }
+
+  /// The display name shown on a folder card (custom alias if set).
+  String _displayName(AssetPathEntity path) =>
+      FolderNames.nameOf(path.id) ?? path.name;
+
   List<_Folder> get _sorted {
-    final list = List<_Folder>.from(_folders);
+    final q = _query.trim().toLowerCase();
+    final list = _folders.where((f) {
+      if (q.isEmpty) return true;
+      // Match either the display alias or the real on-disk folder name.
+      return _displayName(f.path).toLowerCase().contains(q) ||
+          f.path.name.toLowerCase().contains(q);
+    }).toList();
     switch (_sort) {
       case FolderSort.nameAsc:
         list.sort((a, b) =>
@@ -263,6 +291,35 @@ class _FoldersTabState extends State<FoldersTab> {
     }
   }
 
+  PreferredSizeWidget _searchAppBar() {
+    return AppBar(
+      leading: IconButton(
+        icon: const Icon(Icons.arrow_back),
+        onPressed: _stopSearch,
+      ),
+      title: TextField(
+        controller: _searchCtrl,
+        autofocus: true,
+        decoration: const InputDecoration(
+          hintText: '搜尋資料夾名稱',
+          border: InputBorder.none,
+        ),
+        onChanged: (v) => setState(() => _query = v),
+      ),
+      actions: [
+        if (_query.isNotEmpty)
+          IconButton(
+            icon: const Icon(Icons.clear),
+            tooltip: '清除',
+            onPressed: () {
+              _searchCtrl.clear();
+              setState(() => _query = '');
+            },
+          ),
+      ],
+    );
+  }
+
   PreferredSizeWidget _selectionAppBar() {
     return AppBar(
       leading: IconButton(
@@ -303,9 +360,16 @@ class _FoldersTabState extends State<FoldersTab> {
         return Scaffold(
           appBar: _selection.active
               ? _selectionAppBar()
-              : AppBar(
+              : _searching
+                  ? _searchAppBar()
+                  : AppBar(
                   title: const Text('資料夾'),
                   actions: [
+                    IconButton(
+                      icon: const Icon(Icons.search),
+                      tooltip: '搜尋',
+                      onPressed: _startSearch,
+                    ),
                     PopupMenuButton<FolderSort>(
                       icon: const Icon(Icons.sort),
                       tooltip: '排序：${_sort.label}',
@@ -331,11 +395,25 @@ class _FoldersTabState extends State<FoldersTab> {
                     ),
                   ],
                 ),
-          body: _loading
-              ? const Center(child: CircularProgressIndicator())
-              : _folders.isEmpty
-                  ? const Center(child: Text('沒有找到資料夾'))
-                  : GridView.builder(
+          body: _buildBody(),
+        );
+      },
+    );
+  }
+
+  Widget _buildBody() {
+    if (_loading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_folders.isEmpty) {
+      return const Center(child: Text('沒有找到資料夾'));
+    }
+    final sorted = _sorted;
+    if (sorted.isEmpty) {
+      return const Center(child: Text('找不到符合的資料夾'));
+    }
+    return GridView.builder(
+                      key: const PageStorageKey('folders_grid'),
                       padding: const EdgeInsets.all(8),
                       gridDelegate:
                           const SliverGridDelegateWithFixedCrossAxisCount(
@@ -344,21 +422,18 @@ class _FoldersTabState extends State<FoldersTab> {
                         mainAxisSpacing: 12,
                         childAspectRatio: 0.82,
                       ),
-                      itemCount: _sorted.length,
+                      itemCount: sorted.length,
                       itemBuilder: (context, i) {
-                        final folder = _sorted[i];
+                        final folder = sorted[i];
                         return _FolderCard(
                           folder: folder.path,
                           count: folder.count,
                           coverLoader: () => _cover(folder.path),
                           selection: _selection,
-                          onReturn: _reload,
+                          onReturn: () => _reload(showSpinner: false),
                         );
                       },
-                    ),
-        );
-      },
-    );
+                    );
   }
 }
 
