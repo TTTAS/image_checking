@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'native_wallpaper.dart';
+import 'viewer.dart';
 import 'wallpaper_playlist.dart';
 import 'widgets.dart';
 
@@ -27,23 +28,29 @@ class _WallpaperPageState extends State<WallpaperPage> {
   Future<AssetEntity?> _asset(String id) =>
       _assetCache[id] ??= AssetEntity.fromId(id);
 
-  /// Opens the system "crop & set wallpaper" preview for one playlist entry —
-  /// the same screen the single-photo "設為桌布（單張）" uses, so the user can
-  /// preview / position it and pick which screen before applying.
-  Future<void> _preview(WallpaperItem item) async {
+  /// Previews playlist entries by opening the in-app full-screen viewer — no
+  /// system cropper, no external gallery, and the wallpaper is not touched.
+  /// (Setting a single photo as wallpaper lives in the viewer's own menu.)
+  Future<void> _openViewer(int tappedIndex) async {
+    final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
-    try {
-      final asset = await _asset(item.id);
-      final uri = await asset?.getMediaUrl();
-      if (uri == null) {
-        messenger.showSnackBar(const SnackBar(content: Text('找不到原始圖片')));
-        return;
+    final items = WallpaperPlaylist.items.value;
+    final assets = <AssetEntity>[];
+    var initial = 0;
+    for (var i = 0; i < items.length; i++) {
+      final a = await _asset(items[i].id);
+      if (a != null) {
+        if (i == tappedIndex) initial = assets.length;
+        assets.add(a);
       }
-      await NativeWallpaper.setFromUri(uri);
-    } on PlatformException catch (e) {
-      messenger.showSnackBar(
-          SnackBar(content: Text('預覽失敗：${e.message ?? e.code}')));
     }
+    if (assets.isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('找不到可預覽的圖片')));
+      return;
+    }
+    navigator.push(MaterialPageRoute<void>(
+      builder: (_) => ViewerPage(assets: assets, initialIndex: initial),
+    ));
   }
 
   /// Applies the rotation. In this version only static (mode A) actually runs;
@@ -184,7 +191,7 @@ class _WallpaperPageState extends State<WallpaperPage> {
                       index: i,
                       item: item,
                       assetFuture: _asset(item.id),
-                      onPreview: () => _preview(item),
+                      onOpen: () => _openViewer(i),
                       onRemove: () => WallpaperPlaylist.removeAt(i),
                     );
                   },
@@ -321,20 +328,21 @@ class _PlaylistTile extends StatelessWidget {
     required this.index,
     required this.item,
     required this.assetFuture,
-    required this.onPreview,
+    required this.onOpen,
     required this.onRemove,
   });
 
   final int index;
   final WallpaperItem item;
   final Future<AssetEntity?> assetFuture;
-  final VoidCallback onPreview;
+  final VoidCallback onOpen;
   final VoidCallback onRemove;
 
   @override
   Widget build(BuildContext context) {
     return ListTile(
       contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+      onTap: onOpen,
       leading: SizedBox(
         width: 48,
         height: 48,
@@ -372,12 +380,6 @@ class _PlaylistTile extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          IconButton(
-            icon: const Icon(Icons.wallpaper_outlined),
-            tooltip: '預覽並設為此張',
-            visualDensity: VisualDensity.compact,
-            onPressed: onPreview,
-          ),
           IconButton(
             icon: const Icon(Icons.delete_outline),
             tooltip: '從清單移除',
