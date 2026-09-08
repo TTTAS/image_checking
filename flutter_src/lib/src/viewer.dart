@@ -5,6 +5,7 @@ import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:video_player/video_player.dart';
 
 import 'collections.dart';
+import 'library.dart';
 import 'native_wallpaper.dart';
 import 'photo_actions.dart';
 
@@ -47,7 +48,11 @@ class _ViewerPageState extends State<ViewerPage> {
 
   Future<void> _delete() async {
     final deleted = await PhotoActions.delete([_current]);
-    if (deleted.isEmpty || !mounted) return;
+    if (deleted.isEmpty) return;
+    // Update the shared library so the grid behind us reflects the deletion
+    // without a rescan when we pop back.
+    PhotoLibrary.instance.removeIds(deleted);
+    if (!mounted) return;
     setState(() {
       _assets.removeAt(_index);
       if (_index >= _assets.length) _index = _assets.length - 1;

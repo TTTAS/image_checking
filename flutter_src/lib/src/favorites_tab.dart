@@ -4,7 +4,7 @@ import 'package:photo_manager/photo_manager.dart';
 import 'app.dart';
 import 'collections.dart';
 import 'grid_columns.dart';
-import 'media.dart';
+import 'library.dart';
 import 'photo_grid.dart';
 import 'selection.dart';
 import 'viewer.dart';
@@ -22,14 +22,14 @@ class FavoritesTab extends StatefulWidget {
 class _FavoritesTabState extends State<FavoritesTab> {
   final SelectionController _selection = SelectionController();
   final ScrollController _scroll = ScrollController();
-  List<AssetEntity> _all = [];
-  bool _loading = true;
+  final PhotoLibrary _library = PhotoLibrary.instance;
 
   @override
   void initState() {
     super.initState();
     widget.scrollToTop.addListener(_scrollToTop);
-    _reload();
+    // Shares the same cached scan as the date tab; whichever loads first wins.
+    _library.ensureLoaded();
   }
 
   @override
@@ -49,27 +49,8 @@ class _FavoritesTabState extends State<FavoritesTab> {
     );
   }
 
-  Future<void> _reload() async {
-    setState(() => _loading = true);
-    final paths = await PhotoManager.getAssetPathList(
-      onlyAll: true,
-      type: kMediaType,
-    );
-    var assets = <AssetEntity>[];
-    if (paths.isNotEmpty) {
-      final all = paths.first;
-      final count = await all.assetCountAsync;
-      assets = await all.getAssetListRange(start: 0, end: count);
-    }
-    if (!mounted) return;
-    setState(() {
-      _all = assets;
-      _loading = false;
-    });
-  }
-
   List<AssetEntity> get _visible {
-    final list = _all
+    final list = _library.assets.value
         .where((a) =>
             AppCollections.isFavorite(a.id) && !AppCollections.isHidden(a.id))
         .toList();
@@ -78,11 +59,11 @@ class _FavoritesTabState extends State<FavoritesTab> {
   }
 
   void _open(List<AssetEntity> assets, int index) {
-    Navigator.of(context)
-        .push(MaterialPageRoute(
-          builder: (_) => ViewerPage(assets: assets, initialIndex: index),
-        ))
-        .then((_) => _reload());
+    // No reload on return: deletions update the shared library directly, and
+    // favorite/hidden changes come through their notifiers.
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ViewerPage(assets: assets, initialIndex: index),
+    ));
   }
 
   @override
@@ -93,21 +74,25 @@ class _FavoritesTabState extends State<FavoritesTab> {
         AppCollections.favorites,
         AppCollections.hidden,
         GridColumns.count,
+        _library.assets,
+        _library.loading,
       ]),
       builder: (context, _) {
         final visible = _visible;
+        // Only block the whole page while the very first scan has nothing yet.
+        final loading =
+            _library.loading.value && _library.assets.value.isEmpty;
         return Scaffold(
           appBar: _selection.active
               ? selectionAppBar(
                   selection: _selection,
                   all: visible,
-                  reload: _reload,
                 )
               : AppBar(title: const Text('我的最愛')),
-          body: _loading
+          body: loading
               ? const Center(child: CircularProgressIndicator())
               : RefreshIndicator(
-                  onRefresh: _reload,
+                  onRefresh: _library.refresh,
                   child: visible.isEmpty
                       ? ListView(
                           controller: _scroll,

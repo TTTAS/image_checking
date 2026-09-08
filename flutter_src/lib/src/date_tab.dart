@@ -5,7 +5,7 @@ import 'app.dart';
 import 'collections.dart';
 import 'grid_columns.dart';
 import 'hidden_page.dart';
-import 'media.dart';
+import 'library.dart';
 import 'photo_grid.dart';
 import 'selection.dart';
 import 'sort.dart';
@@ -27,21 +27,15 @@ class _DateTabState extends State<DateTab> {
   static const _prefsKey = 'date';
   static const _fallback = SortOption(SortField.date, SortDir.desc);
 
-  /// How many assets to fetch per page. The first page is shown as soon as it
-  /// arrives so the spinner clears fast; the rest stream in behind it.
-  static const _pageSize = 60;
-
   final SelectionController _selection = SelectionController();
   final ScrollController _scroll = ScrollController();
-  List<AssetEntity> _all = [];
+  final PhotoLibrary _library = PhotoLibrary.instance;
   Map<String, int> _sizes = {};
   SortOption _sort = _fallback;
-  bool _loading = true;
 
-  /// Bumped on every [_reload]; a stale in-flight load bails when it changes,
-  /// so overlapping reloads (sort change, returning from the viewer) can't
-  /// interleave their results.
-  int _loadToken = 0;
+  /// True only while loading size info for a fresh size-sort (the library's own
+  /// first-load spinner is tracked separately by [PhotoLibrary.loading]).
+  bool _sortBusy = false;
 
   @override
   void initState() {
@@ -69,106 +63,61 @@ class _DateTabState extends State<DateTab> {
 
   Future<void> _init() async {
     _sort = await SortStore.load(_prefsKey, _fallback);
-    await _reload();
-  }
-
-  Future<void> _reload() async {
-    final token = ++_loadToken;
-    setState(() => _loading = true);
-    // Ask the OS for newest-first order so the very first page is the recent
-    // photos the user sees at the top, instead of waiting for the whole library
-    // to load before they surface.
-    final paths = await PhotoManager.getAssetPathList(
-      onlyAll: true,
-      type: kMediaType,
-      filterOption: FilterOptionGroup(
-        orders: [
-          const OrderOption(type: OrderOptionType.createDate, asc: false),
-        ],
-      ),
-    );
-    if (token != _loadToken || !mounted) return;
-    if (paths.isEmpty) {
-      setState(() {
-        _all = [];
-        _loading = false;
-      });
-      return;
-    }
-
-    // Load one page at a time and reveal the first page immediately, instead of
-    // blocking on the whole library. The remaining pages stream in behind the
-    // grid the user is already looking at.
-    final all = paths.first;
-    final loaded = <AssetEntity>[];
-    for (var page = 0;; page++) {
-      final batch = await all.getAssetListPaged(page: page, size: _pageSize);
-      if (token != _loadToken || !mounted) return;
-      if (batch.isEmpty) break;
-      loaded.addAll(batch);
-      setState(() {
-        _all = List<AssetEntity>.of(loaded);
-        _loading = false;
-      });
-      if (batch.length < _pageSize) break;
-    }
-    // Empty library: the loop broke before clearing the spinner.
-    if (loaded.isEmpty) {
-      setState(() {
-        _all = [];
-        _loading = false;
-      });
-    }
-
-    // Size sorting needs byte lengths, which aren't on AssetEntity; fetch them
-    // once everything is loaded, then let the grid re-sort.
-    if (_sort.field == SortField.size) {
-      final sizes = await loadFileSizes(loaded);
-      if (token != _loadToken || !mounted) return;
-      setState(() => _sizes = sizes);
-    }
+    if (mounted) setState(() {});
+    // Shared, cached scan: the first tab that needs it loads the library once;
+    // returning here later reuses the cache instead of rescanning.
+    await _library.ensureLoaded();
   }
 
   Future<void> _changeSort(SortOption option) async {
-    setState(() => _loading = true);
     if (option.field == SortField.size && _sizes.isEmpty) {
-      _sizes = await loadFileSizes(_all);
+      setState(() => _sortBusy = true);
+      final sizes = await loadFileSizes(_library.assets.value);
+      if (!mounted) return;
+      _sizes = sizes;
+      setState(() => _sortBusy = false);
     }
     await SortStore.save(_prefsKey, option);
     if (!mounted) return;
-    setState(() {
-      _sort = option;
-      _loading = false;
-    });
+    setState(() => _sort = option);
   }
 
   List<AssetEntity> get _visible {
-    final shown =
-        _all.where((a) => !AppCollections.isHidden(a.id)).toList();
+    final shown = _library.assets.value
+        .where((a) => !AppCollections.isHidden(a.id))
+        .toList();
     return sortAssets(shown, _sort, sizeOf: _sizes);
   }
 
   void _open(List<AssetEntity> assets, int index) {
-    Navigator.of(context)
-        .push(MaterialPageRoute(
-          builder: (_) => ViewerPage(assets: assets, initialIndex: index),
-        ))
-        .then((_) => _reload());
+    // No reload on return: deletions update the shared library directly, and
+    // hidden/favorite changes come through their notifiers.
+    Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => ViewerPage(assets: assets, initialIndex: index),
+    ));
   }
 
   @override
   Widget build(BuildContext context) {
     return AnimatedBuilder(
-      animation: Listenable.merge(
-          [_selection, AppCollections.hidden, GridColumns.count]),
+      animation: Listenable.merge([
+        _selection,
+        AppCollections.hidden,
+        GridColumns.count,
+        _library.assets,
+        _library.loading,
+      ]),
       builder: (context, _) {
         final visible = _visible;
+        // Only block the whole page while the very first scan has nothing yet.
+        final loading =
+            (_library.loading.value && _library.assets.value.isEmpty) ||
+                _sortBusy;
         return Scaffold(
           appBar: _selection.active
               ? selectionAppBar(
                   selection: _selection,
                   all: visible,
-                  reload: _reload,
                 )
               : AppBar(
                   title: const Text('日期'),
@@ -177,11 +126,11 @@ class _DateTabState extends State<DateTab> {
                     PopupMenuButton<String>(
                       onSelected: (v) {
                         if (v == 'hidden') {
-                          Navigator.of(context)
-                              .push(MaterialPageRoute(
-                                builder: (_) => const HiddenPage(),
-                              ))
-                              .then((_) => _reload());
+                          // Unhiding updates AppCollections.hidden, which this
+                          // AnimatedBuilder listens to — no rescan needed.
+                          Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => const HiddenPage(),
+                          ));
                         }
                       },
                       itemBuilder: (context) => const [
@@ -193,10 +142,10 @@ class _DateTabState extends State<DateTab> {
                     ),
                   ],
                 ),
-          body: _loading
+          body: loading
               ? const Center(child: CircularProgressIndicator())
               : RefreshIndicator(
-                  onRefresh: _reload,
+                  onRefresh: _library.refresh,
                   child: visible.isEmpty
                       ? ListView(
                           controller: _scroll,
