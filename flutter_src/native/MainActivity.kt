@@ -61,9 +61,13 @@ class MainActivity : FlutterActivity() {
                         applyStaticWallpaper(items, flags, fit, shuffle, interval, result)
                     }
                     "cancelWallpaperWork" -> {
-                        WorkManager.getInstance(applicationContext)
-                            .cancelUniqueWork(WallpaperStore.WORK_NAME)
-                        result.success(true)
+                        try {
+                            WorkManager.getInstance(applicationContext)
+                                .cancelUniqueWork(WallpaperStore.WORK_NAME)
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("EXCEPTION", e.message, null)
+                        }
                     }
                     else -> result.notImplemented()
                 }

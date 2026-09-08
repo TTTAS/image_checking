@@ -130,6 +130,32 @@ elseif ($xml -notmatch 'READ_MEDIA_VIDEO') {
   Write-Host '已補上影片讀取權限。'
 }
 
+# WorkManager on-demand init：改用自訂 Application 並移除預設啟動初始化器，
+# 讓 WorkManager 離開 App 啟動路徑（避免它的自動初始化在某些機型導致一開就閃退）。
+$xml2 = Get-Content $manifest -Raw
+if ($xml2 -notmatch 'xmlns:tools') {
+  $xml2 = $xml2.Replace('<manifest ', '<manifest xmlns:tools="http://schemas.android.com/tools" ')
+}
+$xml2 = $xml2.Replace('${applicationName}', '.PhotoApplication')
+if ($xml2 -notmatch 'WorkManagerInitializer') {
+  $prov = @"
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="`${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                tools:node="remove" />
+        </provider>
+
+"@
+  $xml2 = $xml2.Replace('</application>', $prov + '    </application>')
+}
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($manifest, $xml2, $utf8NoBom)
+Write-Host '已設定 WorkManager on-demand 初始化。'
+
 # 注入原生 Kotlin（MainActivity + 桌布輪播）到產生的 package 目錄
 $genMain = Get-ChildItem (Join-Path $ProjectRoot 'android\app\src\main') -Recurse -Filter MainActivity.kt |
            Select-Object -First 1
