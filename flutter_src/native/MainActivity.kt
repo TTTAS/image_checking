@@ -7,10 +7,14 @@ import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.Settings
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.PeriodicWorkRequest
+import androidx.work.WorkManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /// Adds a "photo_album/native" MethodChannel so Dart can:
 ///  - check / request the "All files access" (MANAGE_EXTERNAL_STORAGE) permission
@@ -47,6 +51,19 @@ class MainActivity : FlutterActivity() {
                         } else {
                             setWallpaper(uri, result)
                         }
+                    }
+                    "applyStaticWallpaper" -> {
+                        val items = call.argument<List<Map<String, Any?>>>("items")
+                        val flags = call.argument<Int>("flags") ?: 1
+                        val fit = call.argument<String>("fit") ?: "crop"
+                        val shuffle = call.argument<Boolean>("shuffle") ?: false
+                        val interval = call.argument<Int>("intervalMinutes") ?: 60
+                        applyStaticWallpaper(items, flags, fit, shuffle, interval, result)
+                    }
+                    "cancelWallpaperWork" -> {
+                        WorkManager.getInstance(applicationContext)
+                            .cancelUniqueWork(WallpaperStore.WORK_NAME)
+                        result.success(true)
                     }
                     else -> result.notImplemented()
                 }
@@ -99,6 +116,54 @@ class MainActivity : FlutterActivity() {
                 result.error("EXCEPTION", e2.message ?: e.message, null)
             }
         }
+    }
+
+    /// Mode A (static rotation): copy the chosen files into the app's private
+    /// dir, set the first one now, and schedule a periodic job to advance. Runs
+    /// off the main thread because copying + decoding can take a moment.
+    private fun applyStaticWallpaper(
+        items: List<Map<String, Any?>>?,
+        flags: Int,
+        fit: String,
+        shuffle: Boolean,
+        intervalMinutes: Int,
+        result: MethodChannel.Result,
+    ) {
+        val sources = items?.mapNotNull { it["path"] as? String } ?: emptyList()
+        if (sources.isEmpty()) {
+            result.error("EMPTY", "沒有可用的圖片檔", null)
+            return
+        }
+        Thread {
+            try {
+                val count =
+                    WallpaperStore.setup(applicationContext, sources, flags, fit, shuffle)
+                if (count == 0) {
+                    runOnUiThread { result.error("COPY_FAILED", "無法複製任何圖片", null) }
+                    return@Thread
+                }
+                scheduleRotation(intervalMinutes)
+                runOnUiThread { result.success(count) }
+            } catch (e: Exception) {
+                runOnUiThread { result.error("EXCEPTION", e.message, null) }
+            }
+        }.start()
+    }
+
+    /// Schedules (or replaces) the periodic rotation job. WorkManager's real
+    /// floor is ~15 minutes, so anything shorter is clamped up.
+    private fun scheduleRotation(intervalMinutes: Int) {
+        val minutes = intervalMinutes.toLong().coerceAtLeast(15L)
+        val request = PeriodicWorkRequest.Builder(
+            WallpaperWorker::class.java,
+            minutes,
+            TimeUnit.MINUTES,
+        ).build()
+        WorkManager.getInstance(applicationContext).enqueueUniquePeriodicWork(
+            WallpaperStore.WORK_NAME,
+            ExistingPeriodicWorkPolicy.UPDATE,
+            request,
+        )
     }
 
     private fun renameFolder(oldPath: String, newName: String, result: MethodChannel.Result) {

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import 'native_wallpaper.dart';
 import 'wallpaper_playlist.dart';
 import 'widgets.dart';
 
@@ -25,10 +27,83 @@ class _WallpaperPageState extends State<WallpaperPage> {
   Future<AssetEntity?> _asset(String id) =>
       _assetCache[id] ??= AssetEntity.fromId(id);
 
-  void _notImplemented(String what) {
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('「$what」會在下一版（靜態輪播）提供')),
-    );
+  /// Applies the rotation. In this version only static (mode A) actually runs;
+  /// live (mode B) is not built yet, so we say so instead of silently doing
+  /// nothing.
+  Future<void> _apply() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final s = WallpaperPlaylist.settings.value;
+    final list = WallpaperPlaylist.items.value;
+    if (list.isEmpty) {
+      messenger.showSnackBar(const SnackBar(content: Text('清單是空的，先加入圖片')));
+      return;
+    }
+    if (s.live) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('動態（Live）模式尚未提供，請先切到「靜態輪播」再套用'),
+      ));
+      return;
+    }
+    messenger.showSnackBar(const SnackBar(content: Text('套用中…')));
+
+    // Resolve each entry to a readable file path for the native side to copy.
+    // Broken / deleted entries are skipped rather than failing the whole apply.
+    final items = <Map<String, dynamic>>[];
+    for (final it in list) {
+      try {
+        final asset = await AssetEntity.fromId(it.id);
+        final file = await asset?.file;
+        if (file != null) {
+          items.add({
+            'id': it.id,
+            'path': file.path,
+            'mime': it.mime,
+            'animated': it.animated,
+          });
+        }
+      } catch (_) {
+        // skip this one
+      }
+    }
+    if (items.isEmpty) {
+      messenger.showSnackBar(
+          const SnackBar(content: Text('找不到可用的圖片檔（可能已被刪除）')));
+      return;
+    }
+    try {
+      await NativeWallpaper.applyStatic(
+        items: items,
+        intervalMinutes: s.intervalMinutes,
+        flags: s.flags,
+        fit: s.fit,
+        shuffle: s.shuffle,
+      );
+      messenger.showSnackBar(SnackBar(
+        content: Text('已套用（共 ${items.length} 張），約每 ${_intervalText(s.intervalMinutes)}換一張'),
+      ));
+    } on PlatformException catch (e) {
+      messenger.showSnackBar(
+          SnackBar(content: Text('套用失敗：${e.message ?? e.code}')));
+    }
+  }
+
+  Future<void> _stop() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      await NativeWallpaper.cancelRotation();
+      messenger.showSnackBar(const SnackBar(
+        content: Text('已停止輪播。目前這張桌布會保留，只是不再自動更換。'),
+      ));
+    } on PlatformException catch (e) {
+      messenger.showSnackBar(
+          SnackBar(content: Text('停止失敗：${e.message ?? e.code}')));
+    }
+  }
+
+  static String _intervalText(int minutes) {
+    if (minutes >= 1440) return '${minutes ~/ 1440} 天';
+    if (minutes >= 60) return '${minutes ~/ 60} 小時';
+    return '$minutes 分鐘';
   }
 
   Future<void> _confirmClear() async {
@@ -99,8 +174,8 @@ class _WallpaperPageState extends State<WallpaperPage> {
           ),
           const Divider(height: 1),
           _ActionBar(
-            onApply: () => _notImplemented('套用輪播'),
-            onStop: () => _notImplemented('停止輪播'),
+            onApply: _apply,
+            onStop: _stop,
           ),
         ],
       ),

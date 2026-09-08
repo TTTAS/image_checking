@@ -41,15 +41,35 @@ jobs:
           echo "----- AndroidManifest.xml -----"
           cat android/app/src/main/AndroidManifest.xml
 
-      - name: Inject native folder-rename code
+      - name: Inject native Kotlin code
         run: |
           GEN=$(find android/app/src/main -name MainActivity.kt | head -1)
           echo "generated MainActivity: $GEN"
           PKG=$(grep -m1 '^package ' "$GEN" | sed 's/^package //; s/[[:space:]]*$//')
-          echo "package: $PKG"
-          sed "s/__PACKAGE__/$PKG/" flutter_src/native/MainActivity.kt > "$GEN"
-          echo "----- MainActivity.kt -----"
-          cat "$GEN"
+          PKGDIR=$(dirname "$GEN")
+          echo "package: $PKG    dir: $PKGDIR"
+          # Copy every native .kt over the generated package dir, replacing the
+          # __PACKAGE__ placeholder with the real package name.
+          for kt in flutter_src/native/*.kt; do
+            name=$(basename "$kt")
+            sed "s/__PACKAGE__/$PKG/" "$kt" > "$PKGDIR/$name"
+            echo "injected $name"
+          done
+          ls -1 "$PKGDIR"
+
+      - name: Inject WorkManager gradle dependency
+        run: |
+          APP_GRADLE=$(ls android/app/build.gradle.kts android/app/build.gradle 2>/dev/null | head -1)
+          echo "app gradle: $APP_GRADLE"
+          if grep -q 'work-runtime' "$APP_GRADLE"; then
+            echo "already present"
+          elif [[ "$APP_GRADLE" == *.kts ]]; then
+            printf '\ndependencies {\n    implementation("androidx.work:work-runtime-ktx:2.9.1")\n}\n' >> "$APP_GRADLE"
+          else
+            printf '\ndependencies {\n    implementation "androidx.work:work-runtime-ktx:2.9.1"\n}\n' >> "$APP_GRADLE"
+          fi
+          echo "----- $APP_GRADLE (tail) -----"
+          tail -6 "$APP_GRADLE"
 
       - name: Build release APK
         run: |

@@ -113,6 +113,7 @@ if ($xml -notmatch 'READ_MEDIA_IMAGES') {
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
 "@
   $xml = $xml -replace '(<manifest[^>]*>)', "`$1`r`n$perm"
@@ -127,6 +128,44 @@ elseif ($xml -notmatch 'READ_MEDIA_VIDEO') {
   $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
   [System.IO.File]::WriteAllText($manifest, $xml, $utf8NoBom)
   Write-Host '已補上影片讀取權限。'
+}
+
+# 注入原生 Kotlin（MainActivity + 桌布輪播）到產生的 package 目錄
+$genMain = Get-ChildItem (Join-Path $ProjectRoot 'android\app\src\main') -Recurse -Filter MainActivity.kt |
+           Select-Object -First 1
+if ($genMain) {
+  $pkgDir = $genMain.DirectoryName
+  $pkgLine = (Select-String -Path $genMain.FullName -Pattern '^package ' | Select-Object -First 1).Line
+  $pkg = ($pkgLine -replace '^package\s+', '' -replace '\s*$', '')
+  Write-Host "package: $pkg  dir: $pkgDir"
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  Get-ChildItem (Join-Path $SrcDir 'native') -Filter *.kt | ForEach-Object {
+    $content = (Get-Content $_.FullName -Raw) -replace '__PACKAGE__', $pkg
+    [System.IO.File]::WriteAllText((Join-Path $pkgDir $_.Name), $content, $utf8NoBom)
+    Write-Host "已注入原生 $($_.Name)"
+  }
+}
+else {
+  Write-Warning '找不到產生的 MainActivity.kt，略過原生注入。'
+}
+
+# 注入 WorkManager 依賴（靜態輪播用）
+$appGradle = @('android\app\build.gradle.kts', 'android\app\build.gradle') |
+             ForEach-Object { Join-Path $ProjectRoot $_ } |
+             Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($appGradle) {
+  $g = Get-Content $appGradle -Raw
+  if ($g -notmatch 'work-runtime') {
+    if ($appGradle -like '*.kts') {
+      $g += "`r`ndependencies {`r`n    implementation(`"androidx.work:work-runtime-ktx:2.9.1`")`r`n}`r`n"
+    }
+    else {
+      $g += "`r`ndependencies {`r`n    implementation `"androidx.work:work-runtime-ktx:2.9.1`"`r`n}`r`n"
+    }
+    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($appGradle, $g, $utf8NoBom)
+    Write-Host '已注入 WorkManager 依賴。'
+  }
 }
 
 # ---------------------------------------------------------------------------
