@@ -175,12 +175,16 @@ else {
   Write-Warning '找不到產生的 MainActivity.kt，略過原生注入。'
 }
 
-# 注入 WorkManager 依賴（靜態輪播用）
+# 注入 WorkManager 依賴 + proguard keep 規則（靜態輪播用）
+# keep 規則避免 release R8 把 WorkManager 的 Room 資料庫類別拿掉導致啟動崩潰。
+Copy-Item (Join-Path $SrcDir 'native\proguard-rules.pro') `
+          (Join-Path $ProjectRoot 'android\app\proguard-rules.pro') -Force
 $appGradle = @('android\app\build.gradle.kts', 'android\app\build.gradle') |
              ForEach-Object { Join-Path $ProjectRoot $_ } |
              Where-Object { Test-Path $_ } | Select-Object -First 1
 if ($appGradle) {
   $g = Get-Content $appGradle -Raw
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
   if ($g -notmatch 'work-runtime') {
     if ($appGradle -like '*.kts') {
       $g += "`r`ndependencies {`r`n    implementation(`"androidx.work:work-runtime-ktx:2.9.1`")`r`n}`r`n"
@@ -188,10 +192,18 @@ if ($appGradle) {
     else {
       $g += "`r`ndependencies {`r`n    implementation `"androidx.work:work-runtime-ktx:2.9.1`"`r`n}`r`n"
     }
-    $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
-    [System.IO.File]::WriteAllText($appGradle, $g, $utf8NoBom)
     Write-Host '已注入 WorkManager 依賴。'
   }
+  if ($g -notmatch 'WALLPAPER_PROGUARD') {
+    if ($appGradle -like '*.kts') {
+      $g += "`r`n// WALLPAPER_PROGUARD`r`nandroid {`r`n    buildTypes {`r`n        getByName(`"release`") {`r`n            proguardFiles(getDefaultProguardFile(`"proguard-android-optimize.txt`"), `"proguard-rules.pro`")`r`n        }`r`n    }`r`n}`r`n"
+    }
+    else {
+      $g += "`r`n// WALLPAPER_PROGUARD`r`nandroid {`r`n    buildTypes {`r`n        release {`r`n            proguardFiles getDefaultProguardFile(`"proguard-android-optimize.txt`"), `"proguard-rules.pro`"`r`n        }`r`n    }`r`n}`r`n"
+    }
+    Write-Host '已注入 proguard keep 規則。'
+  }
+  [System.IO.File]::WriteAllText($appGradle, $g, $utf8NoBom)
 }
 
 # ---------------------------------------------------------------------------

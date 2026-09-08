@@ -64,19 +64,29 @@ jobs:
           done
           ls -1 "$PKGDIR"
 
-      - name: Inject WorkManager gradle dependency
+      - name: Inject WorkManager dependency + proguard keep rules
         run: |
           APP_GRADLE=$(ls android/app/build.gradle.kts android/app/build.gradle 2>/dev/null | head -1)
           echo "app gradle: $APP_GRADLE"
+          # Keep rules so release R8 doesn't strip WorkManager's Room impl.
+          cp flutter_src/native/proguard-rules.pro android/app/proguard-rules.pro
           if grep -q 'work-runtime' "$APP_GRADLE"; then
-            echo "already present"
+            echo "work dep already present"
           elif [[ "$APP_GRADLE" == *.kts ]]; then
             printf '\ndependencies {\n    implementation("androidx.work:work-runtime-ktx:2.9.1")\n}\n' >> "$APP_GRADLE"
           else
             printf '\ndependencies {\n    implementation "androidx.work:work-runtime-ktx:2.9.1"\n}\n' >> "$APP_GRADLE"
           fi
+          # Point the release build at our keep rules (keeps minify on, small APK).
+          if grep -q 'WALLPAPER_PROGUARD' "$APP_GRADLE"; then
+            echo "proguard override already present"
+          elif [[ "$APP_GRADLE" == *.kts ]]; then
+            printf '\n// WALLPAPER_PROGUARD\nandroid {\n    buildTypes {\n        getByName("release") {\n            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")\n        }\n    }\n}\n' >> "$APP_GRADLE"
+          else
+            printf '\n// WALLPAPER_PROGUARD\nandroid {\n    buildTypes {\n        release {\n            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"\n        }\n    }\n}\n' >> "$APP_GRADLE"
+          fi
           echo "----- $APP_GRADLE (tail) -----"
-          tail -6 "$APP_GRADLE"
+          tail -20 "$APP_GRADLE"
 
       - name: Build release APK
         run: |
