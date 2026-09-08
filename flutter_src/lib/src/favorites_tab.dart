@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import 'app.dart';
 import 'collections.dart';
 import 'grid_columns.dart';
 import 'media.dart';
@@ -10,7 +11,9 @@ import 'viewer.dart';
 
 /// Third tab: photos the user marked as favorite (newest first).
 class FavoritesTab extends StatefulWidget {
-  const FavoritesTab({super.key});
+  const FavoritesTab({super.key, required this.scrollToTop});
+
+  final ScrollToTopSignal scrollToTop;
 
   @override
   State<FavoritesTab> createState() => _FavoritesTabState();
@@ -18,19 +21,32 @@ class FavoritesTab extends StatefulWidget {
 
 class _FavoritesTabState extends State<FavoritesTab> {
   final SelectionController _selection = SelectionController();
+  final ScrollController _scroll = ScrollController();
   List<AssetEntity> _all = [];
   bool _loading = true;
 
   @override
   void initState() {
     super.initState();
+    widget.scrollToTop.addListener(_scrollToTop);
     _reload();
   }
 
   @override
   void dispose() {
+    widget.scrollToTop.removeListener(_scrollToTop);
+    _scroll.dispose();
     _selection.dispose();
     super.dispose();
+  }
+
+  void _scrollToTop() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(
+      0,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
   }
 
   Future<void> _reload() async {
@@ -90,25 +106,42 @@ class _FavoritesTabState extends State<FavoritesTab> {
               : AppBar(title: const Text('我的最愛')),
           body: _loading
               ? const Center(child: CircularProgressIndicator())
-              : visible.isEmpty
-                  ? const Center(child: Text('還沒有最愛的照片\n在照片上點愛心即可加入'))
-                  : PinchColumns(
-                      child: GridView.builder(
-                        padding: const EdgeInsets.all(2),
-                        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: GridColumns.count.value,
-                          crossAxisSpacing: 2,
-                          mainAxisSpacing: 2,
+              : RefreshIndicator(
+                  onRefresh: _reload,
+                  child: visible.isEmpty
+                      ? ListView(
+                          controller: _scroll,
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          children: const [
+                            SizedBox(
+                              height: 400,
+                              child: Center(
+                                child: Text('還沒有最愛的照片\n在照片上點愛心即可加入'),
+                              ),
+                            ),
+                          ],
+                        )
+                      : PinchColumns(
+                          child: GridView.builder(
+                            controller: _scroll,
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.all(2),
+                            gridDelegate:
+                                SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: GridColumns.count.value,
+                              crossAxisSpacing: 2,
+                              mainAxisSpacing: 2,
+                            ),
+                            itemCount: visible.length,
+                            itemBuilder: (context, i) => SelectableThumb(
+                              assets: visible,
+                              index: i,
+                              selection: _selection,
+                              onOpen: () => _open(visible, i),
+                            ),
+                          ),
                         ),
-                        itemCount: visible.length,
-                        itemBuilder: (context, i) => SelectableThumb(
-                          assets: visible,
-                          index: i,
-                          selection: _selection,
-                          onOpen: () => _open(visible, i),
-                        ),
-                      ),
-                    ),
+                ),
         );
       },
     );

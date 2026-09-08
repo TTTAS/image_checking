@@ -5,6 +5,12 @@ import 'date_tab.dart';
 import 'favorites_tab.dart';
 import 'folders_tab.dart';
 
+/// Fired when a bottom-nav button is tapped while its tab is already showing.
+/// The tab listens and scrolls its grid back to the top.
+class ScrollToTopSignal extends ChangeNotifier {
+  void fire() => notifyListeners();
+}
+
 class PhotoAlbumApp extends StatelessWidget {
   const PhotoAlbumApp({super.key});
 
@@ -110,8 +116,23 @@ class _Home extends StatefulWidget {
 class _HomeState extends State<_Home> {
   int _index = 0;
 
+  // One signal per tab; firing it tells that tab to scroll to the top.
+  final _signals = List.generate(3, (_) => ScrollToTopSignal());
+
   // Kept alive so switching tabs does not reload the whole library each time.
-  final _pages = const [DateTab(), FoldersTab(), FavoritesTab()];
+  late final _pages = [
+    DateTab(scrollToTop: _signals[0]),
+    FoldersTab(scrollToTop: _signals[1]),
+    FavoritesTab(scrollToTop: _signals[2]),
+  ];
+
+  @override
+  void dispose() {
+    for (final s in _signals) {
+      s.dispose();
+    }
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -119,7 +140,14 @@ class _HomeState extends State<_Home> {
       body: IndexedStack(index: _index, children: _pages),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        onDestinationSelected: (i) {
+          // Re-tapping the active tab scrolls it to the top; otherwise switch.
+          if (i == _index) {
+            _signals[i].fire();
+          } else {
+            setState(() => _index = i);
+          }
+        },
         destinations: const [
           NavigationDestination(
             icon: Icon(Icons.calendar_month_outlined),

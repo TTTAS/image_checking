@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import 'app.dart';
 import 'collections.dart';
 import 'grid_columns.dart';
 import 'hidden_page.dart';
@@ -14,7 +15,9 @@ import 'widgets.dart';
 /// First tab: every photo in the library, grouped by day when sorted by date.
 /// Hidden photos are filtered out. Long-press a photo for multi-select.
 class DateTab extends StatefulWidget {
-  const DateTab({super.key});
+  const DateTab({super.key, required this.scrollToTop});
+
+  final ScrollToTopSignal scrollToTop;
 
   @override
   State<DateTab> createState() => _DateTabState();
@@ -29,6 +32,7 @@ class _DateTabState extends State<DateTab> {
   static const _pageSize = 60;
 
   final SelectionController _selection = SelectionController();
+  final ScrollController _scroll = ScrollController();
   List<AssetEntity> _all = [];
   Map<String, int> _sizes = {};
   SortOption _sort = _fallback;
@@ -42,13 +46,25 @@ class _DateTabState extends State<DateTab> {
   @override
   void initState() {
     super.initState();
+    widget.scrollToTop.addListener(_scrollToTop);
     _init();
   }
 
   @override
   void dispose() {
+    widget.scrollToTop.removeListener(_scrollToTop);
+    _scroll.dispose();
     _selection.dispose();
     super.dispose();
+  }
+
+  void _scrollToTop() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(
+      0,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
   }
 
   Future<void> _init() async {
@@ -179,23 +195,37 @@ class _DateTabState extends State<DateTab> {
                 ),
           body: _loading
               ? const Center(child: CircularProgressIndicator())
-              : visible.isEmpty
-                  ? const Center(child: Text('沒有找到照片'))
-                  : PinchColumns(
-                      child: _sort.groupsByDay
-                          ? _GroupedByDay(
-                              assets: visible,
-                              columns: GridColumns.count.value,
-                              selection: _selection,
-                              onOpen: _open,
-                            )
-                          : _FlatGrid(
-                              assets: visible,
-                              columns: GridColumns.count.value,
-                              selection: _selection,
-                              onOpen: _open,
+              : RefreshIndicator(
+                  onRefresh: _reload,
+                  child: visible.isEmpty
+                      ? ListView(
+                          controller: _scroll,
+                          physics: const AlwaysScrollableScrollPhysics(),
+                          children: const [
+                            SizedBox(
+                              height: 400,
+                              child: Center(child: Text('沒有找到照片')),
                             ),
-                    ),
+                          ],
+                        )
+                      : PinchColumns(
+                          child: _sort.groupsByDay
+                              ? _GroupedByDay(
+                                  assets: visible,
+                                  columns: GridColumns.count.value,
+                                  selection: _selection,
+                                  onOpen: _open,
+                                  controller: _scroll,
+                                )
+                              : _FlatGrid(
+                                  assets: visible,
+                                  columns: GridColumns.count.value,
+                                  selection: _selection,
+                                  onOpen: _open,
+                                  controller: _scroll,
+                                ),
+                        ),
+                ),
         );
       },
     );
@@ -208,16 +238,20 @@ class _FlatGrid extends StatelessWidget {
     required this.columns,
     required this.selection,
     required this.onOpen,
+    required this.controller,
   });
 
   final List<AssetEntity> assets;
   final int columns;
   final SelectionController selection;
   final void Function(List<AssetEntity>, int) onOpen;
+  final ScrollController controller;
 
   @override
   Widget build(BuildContext context) {
     return GridView.builder(
+      controller: controller,
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(2),
       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: columns,
@@ -241,12 +275,14 @@ class _GroupedByDay extends StatelessWidget {
     required this.columns,
     required this.selection,
     required this.onOpen,
+    required this.controller,
   });
 
   final List<AssetEntity> assets;
   final int columns;
   final SelectionController selection;
   final void Function(List<AssetEntity>, int) onOpen;
+  final ScrollController controller;
 
   @override
   Widget build(BuildContext context) {
@@ -309,6 +345,10 @@ class _GroupedByDay extends StatelessWidget {
         ),
       );
     }
-    return CustomScrollView(slivers: slivers);
+    return CustomScrollView(
+      controller: controller,
+      physics: const AlwaysScrollableScrollPhysics(),
+      slivers: slivers,
+    );
   }
 }
