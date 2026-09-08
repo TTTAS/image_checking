@@ -1,6 +1,5 @@
 package __PACKAGE__
 
-import android.app.WallpaperManager
 import android.content.Intent
 import android.media.MediaScannerConnection
 import android.net.Uri
@@ -44,12 +43,13 @@ class MainActivity : FlutterActivity() {
                             renameFolder(oldPath, newName, result)
                         }
                     }
-                    "setWallpaper" -> {
-                        val uri = call.argument<String>("uri")
-                        if (uri == null) {
-                            result.error("ARGS", "uri required", null)
+                    "setWallpaperBytes" -> {
+                        val bytes = call.argument<ByteArray>("bytes")
+                        val flags = call.argument<Int>("flags") ?: 1
+                        if (bytes == null) {
+                            result.error("ARGS", "bytes required", null)
                         } else {
-                            setWallpaper(uri, result)
+                            setWallpaperBytes(bytes, flags, result)
                         }
                     }
                     "applyStaticWallpaper" -> {
@@ -93,33 +93,19 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /// Opens the system "crop & set wallpaper" screen for the image at [uriString]
-    /// so the user can position/crop and pick which screen before applying.
-    private fun setWallpaper(uriString: String, result: MethodChannel.Result) {
-        try {
-            val uri = Uri.parse(uriString)
-            val wm = WallpaperManager.getInstance(applicationContext)
-            val intent = wm.getCropAndSetWallpaperIntent(uri)
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            startActivity(intent)
-            result.success(true)
-        } catch (e: Exception) {
-            // Some devices lack a wallpaper cropper: fall back to the plain
-            // "set as" chooser so the user can still apply it as wallpaper.
+    /// Sets an already-cropped image (PNG/JPEG bytes, sized to the screen by the
+    /// Dart crop page) as the wallpaper for [flags] (1=home, 2=lock, 3=both).
+    /// Pure decode + WallpaperManager.setBitmap — never opens any system UI or
+    /// external app. Runs off the main thread (decode can be heavy).
+    private fun setWallpaperBytes(bytes: ByteArray, flags: Int, result: MethodChannel.Result) {
+        Thread {
             try {
-                val uri = Uri.parse(uriString)
-                val fallback = Intent(Intent.ACTION_ATTACH_DATA).apply {
-                    addCategory(Intent.CATEGORY_DEFAULT)
-                    setDataAndType(uri, "image/*")
-                    putExtra("mimeType", "image/*")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                }
-                startActivity(Intent.createChooser(fallback, "設為桌布"))
-                result.success(true)
-            } catch (e2: Exception) {
-                result.error("EXCEPTION", e2.message ?: e.message, null)
+                val honored = WallpaperStore.setWallpaperBytes(applicationContext, bytes, flags)
+                runOnUiThread { result.success(honored) }
+            } catch (e: Exception) {
+                runOnUiThread { result.error("EXCEPTION", e.message, null) }
             }
-        }
+        }.start()
     }
 
     /// Mode A (static rotation): copy the chosen files into the app's private

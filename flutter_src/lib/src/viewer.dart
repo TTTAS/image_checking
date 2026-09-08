@@ -1,13 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:video_player/video_player.dart';
 
 import 'collections.dart';
 import 'library.dart';
-import 'native_wallpaper.dart';
 import 'photo_actions.dart';
+import 'wallpaper_crop_page.dart';
 import 'wallpaper_page.dart';
 import 'wallpaper_playlist.dart';
 
@@ -107,23 +106,6 @@ class _ViewerPageState extends State<ViewerPage> {
     );
   }
 
-  Future<void> _setWallpaper() async {
-    final messenger = ScaffoldMessenger.of(context);
-    final uri = await _current.getMediaUrl();
-    if (uri == null) {
-      messenger.showSnackBar(const SnackBar(content: Text('找不到原始圖片')));
-      return;
-    }
-    try {
-      // Opens the system cropper, where the user positions the image and
-      // chooses which screen before confirming.
-      await NativeWallpaper.setFromUri(uri);
-    } on PlatformException catch (e) {
-      messenger.showSnackBar(
-          SnackBar(content: Text('設定桌布失敗：${e.message ?? e.code}')));
-    }
-  }
-
   Future<void> _addToPlaylist() async {
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
@@ -191,7 +173,11 @@ class _ViewerPageState extends State<ViewerPage> {
               icon: const Icon(Icons.wallpaper),
               tooltip: '桌布',
               onSelected: (v) {
-                if (v == 'single') _setWallpaper();
+                if (v == 'single') {
+                  Navigator.of(context).push(MaterialPageRoute<void>(
+                    builder: (_) => WallpaperCropPage(asset: _current),
+                  ));
+                }
                 if (v == 'playlist') _addToPlaylist();
               },
               itemBuilder: (context) => const [

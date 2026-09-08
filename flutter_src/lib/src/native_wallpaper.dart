@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/services.dart';
 
 /// Bridge to the native (Kotlin) side for wallpaper features.
@@ -6,11 +8,18 @@ class NativeWallpaper {
 
   static const _channel = MethodChannel('photo_album/native');
 
-  /// Opens the system "crop & set wallpaper" screen for the image at [uri]
-  /// (a content:// URI), letting the user position/crop and choose which
-  /// screen before applying. Throws [PlatformException] on failure.
-  static Future<void> setFromUri(String uri) async {
-    await _channel.invokeMethod<bool>('setWallpaper', {'uri': uri});
+  /// Sets an already-cropped image (PNG bytes, sized to the screen by the in-app
+  /// crop page) as the wallpaper for [flags] (1 = home, 2 = lock, 3 = both).
+  /// Pure native decode + setBitmap — never opens the system cropper or any
+  /// external app. Returns whether the per-screen flags were honored (true on
+  /// Android N+; false on older devices that can only set one wallpaper).
+  /// Throws [PlatformException] on failure.
+  static Future<bool> setWallpaperBytes(Uint8List bytes, int flags) async {
+    final honored = await _channel.invokeMethod<bool>('setWallpaperBytes', {
+      'bytes': bytes,
+      'flags': flags,
+    });
+    return honored ?? true;
   }
 
   /// Applies the static rotation (mode A): copies the given source files into

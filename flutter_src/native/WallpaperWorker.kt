@@ -128,15 +128,34 @@ object WallpaperStore {
             val (w, h) = screenSize(context)
             val bmp = decodeScaled(path, w, h) ?: return
             val out = if (fit == "contain") bmp else centerCrop(bmp, w, h)
-            val wm = WallpaperManager.getInstance(context)
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                wm.setBitmap(out, null, true, if (flags == 0) 1 else flags)
-            } else {
-                wm.setBitmap(out)
-            }
+            applyBitmap(context, out, flags)
         } catch (_: Exception) {
             // A bad frame must never crash the worker or the app.
         }
+    }
+
+    /// Sets [bmp] as the wallpaper for [flags] (1=home, 2=lock, 3=both).
+    /// Returns true if the per-screen flags were honored (Android N+); false on
+    /// older devices where only a single wallpaper can be set. Shared by the
+    /// rotation worker and the in-app crop page.
+    fun applyBitmap(context: Context, bmp: Bitmap, flags: Int): Boolean {
+        val wm = WallpaperManager.getInstance(context)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            wm.setBitmap(bmp, null, true, if (flags == 0) 1 else flags)
+            true
+        } else {
+            wm.setBitmap(bmp)
+            false
+        }
+    }
+
+    /// Sets an already-cropped PNG/JPEG (as bytes, sized by the caller to the
+    /// screen) as the wallpaper. Pure decode + setBitmap — never opens any system
+    /// UI. Returns whether per-screen [flags] were honored (Android N+).
+    fun setWallpaperBytes(context: Context, bytes: ByteArray, flags: Int): Boolean {
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            ?: throw IllegalStateException("無法解碼圖片")
+        return applyBitmap(context, bmp, flags)
     }
 
     private fun screenSize(context: Context): Pair<Int, Int> {

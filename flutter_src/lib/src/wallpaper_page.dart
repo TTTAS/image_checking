@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'native_wallpaper.dart';
-import 'viewer.dart';
+import 'wallpaper_crop_page.dart';
 import 'wallpaper_playlist.dart';
 import 'widgets.dart';
 
@@ -28,28 +28,18 @@ class _WallpaperPageState extends State<WallpaperPage> {
   Future<AssetEntity?> _asset(String id) =>
       _assetCache[id] ??= AssetEntity.fromId(id);
 
-  /// Previews playlist entries by opening the in-app full-screen viewer — no
-  /// system cropper, no external gallery, and the wallpaper is not touched.
-  /// (Setting a single photo as wallpaper lives in the viewer's own menu.)
-  Future<void> _openViewer(int tappedIndex) async {
+  /// Opens the in-app crop + preview page for one entry — no system cropper, no
+  /// external gallery. The wallpaper is only changed if the user confirms there.
+  Future<void> _openCrop(WallpaperItem item) async {
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
-    final items = WallpaperPlaylist.items.value;
-    final assets = <AssetEntity>[];
-    var initial = 0;
-    for (var i = 0; i < items.length; i++) {
-      final a = await _asset(items[i].id);
-      if (a != null) {
-        if (i == tappedIndex) initial = assets.length;
-        assets.add(a);
-      }
-    }
-    if (assets.isEmpty) {
-      messenger.showSnackBar(const SnackBar(content: Text('找不到可預覽的圖片')));
+    final asset = await _asset(item.id);
+    if (asset == null) {
+      messenger.showSnackBar(const SnackBar(content: Text('找不到原始圖片')));
       return;
     }
     navigator.push(MaterialPageRoute<void>(
-      builder: (_) => ViewerPage(assets: assets, initialIndex: initial),
+      builder: (_) => WallpaperCropPage(asset: asset),
     ));
   }
 
@@ -191,7 +181,7 @@ class _WallpaperPageState extends State<WallpaperPage> {
                       index: i,
                       item: item,
                       assetFuture: _asset(item.id),
-                      onOpen: () => _openViewer(i),
+                      onOpen: () => _openCrop(item),
                       onRemove: () => WallpaperPlaylist.removeAt(i),
                     );
                   },
@@ -380,6 +370,12 @@ class _PlaylistTile extends StatelessWidget {
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
+          IconButton(
+            icon: const Icon(Icons.crop),
+            tooltip: '預覽／裁切桌布',
+            visualDensity: VisualDensity.compact,
+            onPressed: onOpen,
+          ),
           IconButton(
             icon: const Icon(Icons.delete_outline),
             tooltip: '從清單移除',
