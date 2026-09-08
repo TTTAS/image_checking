@@ -37,6 +37,16 @@ class _DateTabState extends State<DateTab> {
   /// first-load spinner is tracked separately by [PhotoLibrary.loading]).
   bool _sortBusy = false;
 
+  // Derived data (the filtered+sorted list and its day sections) is expensive
+  // to recompute, so it's cached and only rebuilt when an input that actually
+  // affects it changes — not on every rebuild (selection, pinch-zoom, etc).
+  List<AssetEntity>? _cachedVisible;
+  List<_DaySection> _cachedSections = const [];
+  List<AssetEntity>? _keyAssets;
+  Set<String>? _keyHidden;
+  Map<String, int>? _keySizes;
+  SortOption? _keySort;
+
   @override
   void initState() {
     super.initState();
@@ -82,11 +92,53 @@ class _DateTabState extends State<DateTab> {
     setState(() => _sort = option);
   }
 
-  List<AssetEntity> get _visible {
-    final shown = _library.assets.value
-        .where((a) => !AppCollections.isHidden(a.id))
-        .toList();
-    return sortAssets(shown, _sort, sizeOf: _sizes);
+  /// Rebuilds [_cachedVisible] / [_cachedSections] only when an input that
+  /// affects them changed. The library assets and hidden set are ValueNotifier
+  /// values (new object only on real change), so identity checks are enough.
+  void _rebuildDerivedIfNeeded() {
+    final assets = _library.assets.value;
+    final hidden = AppCollections.hidden.value;
+    if (_cachedVisible != null &&
+        identical(assets, _keyAssets) &&
+        identical(hidden, _keyHidden) &&
+        identical(_sizes, _keySizes) &&
+        _keySort != null &&
+        _keySort!.field == _sort.field &&
+        _keySort!.dir == _sort.dir) {
+      return;
+    }
+    _keyAssets = assets;
+    _keyHidden = hidden;
+    _keySizes = _sizes;
+    _keySort = _sort;
+
+    final shown = assets.where((a) => !hidden.contains(a.id)).toList();
+    final visible = sortAssets(shown, _sort, sizeOf: _sizes);
+    _cachedVisible = visible;
+    // Day sections only matter for the grouped (date-sorted) view.
+    _cachedSections = _sort.groupsByDay ? _computeSections(visible) : const [];
+  }
+
+  /// Groups the (already date-sorted) list into contiguous per-day sections.
+  List<_DaySection> _computeSections(List<AssetEntity> assets) {
+    final sections = <_DaySection>[];
+    String? key;
+    var start = 0;
+    var count = 0;
+    for (var i = 0; i < assets.length; i++) {
+      final d = assets[i].createDateTime;
+      final k =
+          '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+      if (k != key) {
+        if (key != null) sections.add(_DaySection(key, start, count));
+        key = k;
+        start = i;
+        count = 0;
+      }
+      count++;
+    }
+    if (key != null) sections.add(_DaySection(key, start, count));
+    return sections;
   }
 
   void _open(List<AssetEntity> assets, int index) {
@@ -108,7 +160,8 @@ class _DateTabState extends State<DateTab> {
         _library.loading,
       ]),
       builder: (context, _) {
-        final visible = _visible;
+        _rebuildDerivedIfNeeded();
+        final visible = _cachedVisible!;
         // Only block the whole page while the very first scan has nothing yet.
         final loading =
             (_library.loading.value && _library.assets.value.isEmpty) ||
@@ -161,6 +214,7 @@ class _DateTabState extends State<DateTab> {
                           child: _sort.groupsByDay
                               ? _GroupedByDay(
                                   assets: visible,
+                                  sections: _cachedSections,
                                   columns: GridColumns.count.value,
                                   selection: _selection,
                                   onOpen: _open,
@@ -218,9 +272,19 @@ class _FlatGrid extends StatelessWidget {
   }
 }
 
+/// A contiguous run of photos that share one calendar day. [start] is the
+/// index of the first photo into the visible list, [count] how many follow.
+class _DaySection {
+  const _DaySection(this.dayKey, this.start, this.count);
+  final String dayKey;
+  final int start;
+  final int count;
+}
+
 class _GroupedByDay extends StatelessWidget {
   const _GroupedByDay({
     required this.assets,
+    required this.sections,
     required this.columns,
     required this.selection,
     required this.onOpen,
@@ -228,6 +292,7 @@ class _GroupedByDay extends StatelessWidget {
   });
 
   final List<AssetEntity> assets;
+  final List<_DaySection> sections;
   final int columns;
   final SelectionController selection;
   final void Function(List<AssetEntity>, int) onOpen;
@@ -235,32 +300,17 @@ class _GroupedByDay extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    // Group by calendar day, preserving the (already sorted) order and each
-    // photo's global index into [assets] (used by the viewer).
-    final order = <String>[];
-    final counts = <String, int>{};
-    final firstIndex = <String, int>{};
-    for (var i = 0; i < assets.length; i++) {
-      final d = assets[i].createDateTime;
-      final key =
-          '${d.year}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
-      if (!counts.containsKey(key)) {
-        order.add(key);
-        firstIndex[key] = i;
-        counts[key] = 0;
-      }
-      counts[key] = counts[key]! + 1;
-    }
-
+    // Sections are precomputed (and cached) by the parent; here we only lay
+    // them out. Each day's grid still builds its thumbnails lazily.
     final slivers = <Widget>[];
-    for (final key in order) {
-      final start = firstIndex[key]!;
+    for (final section in sections) {
+      final start = section.start;
       slivers.add(
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.fromLTRB(12, 16, 12, 6),
             child: Text(
-              key,
+              section.dayKey,
               style: Theme.of(context)
                   .textTheme
                   .titleMedium
@@ -288,7 +338,7 @@ class _GroupedByDay extends StatelessWidget {
                   onOpen: () => onOpen(assets, globalIndex),
                 );
               },
-              childCount: counts[key]!,
+              childCount: section.count,
             ),
           ),
         ),
