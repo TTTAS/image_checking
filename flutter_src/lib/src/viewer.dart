@@ -8,6 +8,8 @@ import 'collections.dart';
 import 'library.dart';
 import 'native_wallpaper.dart';
 import 'photo_actions.dart';
+import 'wallpaper_page.dart';
+import 'wallpaper_playlist.dart';
 
 /// Full-screen viewer: swipe between photos, pinch-zoom, and act on a single
 /// photo (favorite / edit / share / hide / delete).
@@ -122,6 +124,24 @@ class _ViewerPageState extends State<ViewerPage> {
     }
   }
 
+  Future<void> _addToPlaylist() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    final added = await WallpaperPlaylist.add(_current);
+    if (!mounted) return;
+    messenger.showSnackBar(SnackBar(
+      content: Text(added ? '已加入輪播清單' : '無法加入（不支援的格式或已在清單中）'),
+      action: added
+          ? SnackBarAction(
+              label: '檢視',
+              onPressed: () => navigator.push(
+                MaterialPageRoute<void>(builder: (_) => const WallpaperPage()),
+              ),
+            )
+          : null,
+    ));
+  }
+
   Future<Map<String, String>> _collectInfo(AssetEntity a) async {
     final file = await a.file;
     final bytes = file != null ? await file.length() : 0;
@@ -167,10 +187,17 @@ class _ViewerPageState extends State<ViewerPage> {
         ),
         actions: [
           if (_current.type != AssetType.video)
-            IconButton(
+            PopupMenuButton<String>(
               icon: const Icon(Icons.wallpaper),
-              tooltip: '設為桌布',
-              onPressed: _setWallpaper,
+              tooltip: '桌布',
+              onSelected: (v) {
+                if (v == 'single') _setWallpaper();
+                if (v == 'playlist') _addToPlaylist();
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(value: 'single', child: Text('設為桌布（單張）')),
+                PopupMenuItem(value: 'playlist', child: Text('加入輪播清單')),
+              ],
             ),
           IconButton(
             icon: const Icon(Icons.info_outline),

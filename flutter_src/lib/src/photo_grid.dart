@@ -5,6 +5,8 @@ import 'collections.dart';
 import 'library.dart';
 import 'photo_actions.dart';
 import 'selection.dart';
+import 'wallpaper_page.dart';
+import 'wallpaper_playlist.dart';
 import 'widgets.dart';
 
 /// One thumbnail that supports tap-to-open, long-press-to-select, and shows
@@ -113,6 +115,34 @@ AppBar selectionAppBar({
         icon: const Icon(Icons.share_outlined),
         tooltip: '分享',
         onPressed: () => PhotoActions.share(selected()),
+      ),
+      // Wrapped in a Builder so we get a context under the Scaffold for the
+      // SnackBar / navigation without changing this function's signature.
+      Builder(
+        builder: (context) => IconButton(
+          icon: const Icon(Icons.slideshow_outlined),
+          tooltip: '加入輪播',
+          onPressed: () async {
+            final messenger = ScaffoldMessenger.of(context);
+            final navigator = Navigator.of(context);
+            final added = await WallpaperPlaylist.addAll(selected());
+            selection.clear();
+            messenger.showSnackBar(SnackBar(
+              content: Text(added > 0
+                  ? '已加入 $added 張到輪播清單'
+                  : '沒有可加入的圖片（不支援影片或已在清單中）'),
+              action: added > 0
+                  ? SnackBarAction(
+                      label: '檢視',
+                      onPressed: () => navigator.push(
+                        MaterialPageRoute<void>(
+                            builder: (_) => const WallpaperPage()),
+                      ),
+                    )
+                  : null,
+            ));
+          },
+        ),
       ),
       IconButton(
         icon: const Icon(Icons.delete_outline),
