@@ -28,12 +28,21 @@ class _FolderDetailPageState extends State<FolderDetailPage> {
   static const _prefsKey = 'folder_photos';
   static const _fallback = SortOption(SortField.name, SortDir.asc);
 
+  /// How many assets to fetch per page. The first page is shown as soon as it
+  /// arrives so the spinner clears fast; the rest stream in behind it.
+  static const _pageSize = 60;
+
   final SelectionController _selection = SelectionController();
   List<AssetEntity> _all = [];
   Map<String, int> _sizes = {};
   SortOption _sort = _fallback;
   bool _loading = true;
   bool _pickingCover = false;
+
+  /// Bumped on every [_reload]; a stale in-flight load bails when it changes,
+  /// so overlapping reloads (sort change, returning from the viewer) can't
+  /// interleave their results.
+  int _loadToken = 0;
 
   @override
   void initState() {
@@ -53,18 +62,40 @@ class _FolderDetailPageState extends State<FolderDetailPage> {
   }
 
   Future<void> _reload() async {
+    final token = ++_loadToken;
     setState(() => _loading = true);
-    // Re-resolve the folder so counts are fresh after deletions.
-    final count = await widget.folder.assetCountAsync;
-    final assets = await widget.folder.getAssetListRange(start: 0, end: count);
-    if (_sort.field == SortField.size) {
-      _sizes = await loadFileSizes(assets);
+
+    // Load one page at a time and reveal the first page immediately, instead of
+    // blocking on the whole folder. The remaining pages stream in behind the
+    // grid the user is already looking at.
+    final loaded = <AssetEntity>[];
+    for (var page = 0;; page++) {
+      final batch =
+          await widget.folder.getAssetListPaged(page: page, size: _pageSize);
+      if (token != _loadToken || !mounted) return;
+      if (batch.isEmpty) break;
+      loaded.addAll(batch);
+      setState(() {
+        _all = List<AssetEntity>.of(loaded);
+        _loading = false;
+      });
+      if (batch.length < _pageSize) break;
     }
-    if (!mounted) return;
-    setState(() {
-      _all = assets;
-      _loading = false;
-    });
+    // Empty folder: the loop broke before clearing the spinner.
+    if (loaded.isEmpty) {
+      setState(() {
+        _all = [];
+        _loading = false;
+      });
+    }
+
+    // Size sorting needs byte lengths, which aren't on AssetEntity; fetch them
+    // once everything is loaded, then let the grid re-sort.
+    if (_sort.field == SortField.size) {
+      final sizes = await loadFileSizes(loaded);
+      if (token != _loadToken || !mounted) return;
+      setState(() => _sizes = sizes);
+    }
   }
 
   Future<void> _changeSort(SortOption option) async {

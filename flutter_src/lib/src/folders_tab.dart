@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'app.dart';
 import 'collections.dart';
 import 'folder_covers.dart';
 import 'folder_detail.dart';
@@ -35,7 +36,9 @@ class _Folder {
 /// Long-press a folder to enter selection mode and act on WHOLE albums at
 /// once: favorite / mark-hidden / delete every photo they contain.
 class FoldersTab extends StatefulWidget {
-  const FoldersTab({super.key});
+  const FoldersTab({super.key, required this.scrollToTop});
+
+  final ScrollToTopSignal scrollToTop;
 
   @override
   State<FoldersTab> createState() => _FoldersTabState();
@@ -45,6 +48,7 @@ class _FoldersTabState extends State<FoldersTab> {
   static const _prefsKey = 'sort.folders_list';
 
   final SelectionController _selection = SelectionController();
+  final ScrollController _scroll = ScrollController();
   final TextEditingController _searchCtrl = TextEditingController();
   List<_Folder> _folders = [];
   FolderSort _sort = FolderSort.nameAsc;
@@ -58,6 +62,7 @@ class _FoldersTabState extends State<FoldersTab> {
   @override
   void initState() {
     super.initState();
+    widget.scrollToTop.addListener(_scrollToTop);
     FolderCovers.map.addListener(_onCoversChanged);
     FolderNames.map.addListener(_rebuild);
     _init();
@@ -65,11 +70,22 @@ class _FoldersTabState extends State<FoldersTab> {
 
   @override
   void dispose() {
+    widget.scrollToTop.removeListener(_scrollToTop);
     FolderCovers.map.removeListener(_onCoversChanged);
     FolderNames.map.removeListener(_rebuild);
+    _scroll.dispose();
     _searchCtrl.dispose();
     _selection.dispose();
     super.dispose();
+  }
+
+  void _scrollToTop() {
+    if (!_scroll.hasClients) return;
+    _scroll.animateTo(
+      0,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOut,
+    );
   }
 
   /// A cover was set/cleared elsewhere: drop the cache so covers reload.
@@ -405,35 +421,56 @@ class _FoldersTabState extends State<FoldersTab> {
     if (_loading) {
       return const Center(child: CircularProgressIndicator());
     }
+    return RefreshIndicator(
+      // Keep the grid on screen and let the pull spinner show the progress,
+      // instead of replacing everything with the full-screen spinner.
+      onRefresh: () => _reload(showSpinner: false),
+      child: _buildScrollable(),
+    );
+  }
+
+  Widget _buildScrollable() {
     if (_folders.isEmpty) {
-      return const Center(child: Text('沒有找到資料夾'));
+      return _emptyState('沒有找到資料夾');
     }
     final sorted = _sorted;
     if (sorted.isEmpty) {
-      return const Center(child: Text('找不到符合的資料夾'));
+      return _emptyState('找不到符合的資料夾');
     }
     return GridView.builder(
-                      key: const PageStorageKey('folders_grid'),
-                      padding: const EdgeInsets.all(8),
-                      gridDelegate:
-                          const SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: 2,
-                        crossAxisSpacing: 8,
-                        mainAxisSpacing: 12,
-                        childAspectRatio: 0.82,
-                      ),
-                      itemCount: sorted.length,
-                      itemBuilder: (context, i) {
-                        final folder = sorted[i];
-                        return _FolderCard(
-                          folder: folder.path,
-                          count: folder.count,
-                          coverLoader: () => _cover(folder.path),
-                          selection: _selection,
-                          onReturn: () => _reload(showSpinner: false),
-                        );
-                      },
-                    );
+      controller: _scroll,
+      physics: const AlwaysScrollableScrollPhysics(),
+      key: const PageStorageKey('folders_grid'),
+      padding: const EdgeInsets.all(8),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 12,
+        childAspectRatio: 0.82,
+      ),
+      itemCount: sorted.length,
+      itemBuilder: (context, i) {
+        final folder = sorted[i];
+        return _FolderCard(
+          folder: folder.path,
+          count: folder.count,
+          coverLoader: () => _cover(folder.path),
+          selection: _selection,
+          onReturn: () => _reload(showSpinner: false),
+        );
+      },
+    );
+  }
+
+  // Scrollable so pull-to-refresh still works when there's nothing to show.
+  Widget _emptyState(String message) {
+    return ListView(
+      controller: _scroll,
+      physics: const AlwaysScrollableScrollPhysics(),
+      children: [
+        SizedBox(height: 400, child: Center(child: Text(message))),
+      ],
+    );
   }
 }
 

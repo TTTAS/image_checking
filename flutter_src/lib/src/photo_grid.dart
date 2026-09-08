@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'collections.dart';
+import 'library.dart';
 import 'photo_actions.dart';
 import 'selection.dart';
 import 'widgets.dart';
@@ -70,10 +71,14 @@ class SelectableThumb extends StatelessWidget {
 
 /// The AppBar shown while in multi-select mode: favorite / hide / share /
 /// delete acting on the current selection.
+/// [reload] is only needed by folder-scoped grids (folder detail) that keep
+/// their own asset list; the home tabs read the shared [PhotoLibrary] and pass
+/// nothing, since hiding flows through [AppCollections] and deletion through
+/// [PhotoLibrary.removeIds].
 AppBar selectionAppBar({
   required SelectionController selection,
   required List<AssetEntity> all,
-  required Future<void> Function() reload,
+  Future<void> Function()? reload,
 }) {
   List<AssetEntity> selected() =>
       all.where((a) => selection.ids.contains(a.id)).toList();
@@ -97,9 +102,11 @@ AppBar selectionAppBar({
         icon: const Icon(Icons.visibility_off_outlined),
         tooltip: '隱藏',
         onPressed: () async {
+          // Hiding updates AppCollections.hidden; grids listen to it and drop
+          // these photos on their own — no rescan for the home tabs.
           await AppCollections.setHidden(selection.ids, true);
           selection.clear();
-          await reload();
+          if (reload != null) await reload();
         },
       ),
       IconButton(
@@ -113,7 +120,9 @@ AppBar selectionAppBar({
         onPressed: () async {
           final deleted = await PhotoActions.delete(selected());
           selection.clear();
-          if (deleted.isNotEmpty) await reload();
+          // Drop the deleted ids from the shared cache instead of rescanning.
+          PhotoLibrary.instance.removeIds(deleted);
+          if (reload != null && deleted.isNotEmpty) await reload();
         },
       ),
     ],
