@@ -26,7 +26,7 @@ class _DateTabState extends State<DateTab> {
 
   /// How many assets to fetch per page. The first page is shown as soon as it
   /// arrives so the spinner clears fast; the rest stream in behind it.
-  static const _pageSize = 120;
+  static const _pageSize = 60;
 
   final SelectionController _selection = SelectionController();
   List<AssetEntity> _all = [];
@@ -59,9 +59,17 @@ class _DateTabState extends State<DateTab> {
   Future<void> _reload() async {
     final token = ++_loadToken;
     setState(() => _loading = true);
+    // Ask the OS for newest-first order so the very first page is the recent
+    // photos the user sees at the top, instead of waiting for the whole library
+    // to load before they surface.
     final paths = await PhotoManager.getAssetPathList(
       onlyAll: true,
       type: kMediaType,
+      filterOption: FilterOptionGroup(
+        orders: [
+          const OrderOption(type: OrderOptionType.createDate, asc: false),
+        ],
+      ),
     );
     if (token != _loadToken || !mounted) return;
     if (paths.isEmpty) {

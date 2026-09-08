@@ -30,7 +30,7 @@ class _FolderDetailPageState extends State<FolderDetailPage> {
 
   /// How many assets to fetch per page. The first page is shown as soon as it
   /// arrives so the spinner clears fast; the rest stream in behind it.
-  static const _pageSize = 120;
+  static const _pageSize = 60;
 
   final SelectionController _selection = SelectionController();
   List<AssetEntity> _all = [];
