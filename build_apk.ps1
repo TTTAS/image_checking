@@ -113,6 +113,7 @@ if ($xml -notmatch 'READ_MEDIA_IMAGES') {
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.SET_WALLPAPER" />
 "@
   $xml = $xml -replace '(<manifest[^>]*>)', "`$1`r`n$perm"
@@ -127,6 +128,108 @@ elseif ($xml -notmatch 'READ_MEDIA_VIDEO') {
   $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
   [System.IO.File]::WriteAllText($manifest, $xml, $utf8NoBom)
   Write-Host '已補上影片讀取權限。'
+}
+
+# WorkManager on-demand init：改用自訂 Application 並移除預設啟動初始化器，
+# 讓 WorkManager 離開 App 啟動路徑（避免它的自動初始化在某些機型導致一開就閃退）。
+$xml2 = Get-Content $manifest -Raw
+if ($xml2 -notmatch 'xmlns:tools') {
+  $xml2 = $xml2.Replace('<manifest ', '<manifest xmlns:tools="http://schemas.android.com/tools" ')
+}
+$xml2 = $xml2.Replace('${applicationName}', '.PhotoApplication')
+if ($xml2 -notmatch 'WorkManagerInitializer') {
+  $prov = @"
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="`${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.work.WorkManagerInitializer"
+                tools:node="remove" />
+        </provider>
+
+"@
+  $xml2 = $xml2.Replace('</application>', $prov + '    </application>')
+}
+# 註冊 Live Wallpaper service（動態模式 B）
+if ($xml2 -notmatch 'PlaylistWallpaperService') {
+  $svc = @"
+        <service
+            android:name=".PlaylistWallpaperService"
+            android:exported="true"
+            android:label="@string/playlist_wallpaper_label"
+            android:permission="android.permission.BIND_WALLPAPER">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/playlist_wallpaper" />
+        </service>
+
+"@
+  $xml2 = $xml2.Replace('</application>', $svc + '    </application>')
+}
+$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+[System.IO.File]::WriteAllText($manifest, $xml2, $utf8NoBom)
+Write-Host '已設定 WorkManager on-demand 初始化與 Live Wallpaper service。'
+
+# 注入原生 Kotlin（MainActivity + 桌布輪播）到產生的 package 目錄
+$genMain = Get-ChildItem (Join-Path $ProjectRoot 'android\app\src\main') -Recurse -Filter MainActivity.kt |
+           Select-Object -First 1
+if ($genMain) {
+  $pkgDir = $genMain.DirectoryName
+  $pkgLine = (Select-String -Path $genMain.FullName -Pattern '^package ' | Select-Object -First 1).Line
+  $pkg = ($pkgLine -replace '^package\s+', '' -replace '\s*$', '')
+  Write-Host "package: $pkg  dir: $pkgDir"
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  Get-ChildItem (Join-Path $SrcDir 'native') -Filter *.kt | ForEach-Object {
+    $content = (Get-Content $_.FullName -Raw) -replace '__PACKAGE__', $pkg
+    [System.IO.File]::WriteAllText((Join-Path $pkgDir $_.Name), $content, $utf8NoBom)
+    Write-Host "已注入原生 $($_.Name)"
+  }
+  # Live Wallpaper res（xml descriptor + strings；wallpaper_strings.xml 不覆蓋 strings.xml）
+  $resSrc = Join-Path $SrcDir 'native\res'
+  if (Test-Path $resSrc) {
+    $resDst = Join-Path $ProjectRoot 'android\app\src\main\res'
+    Copy-Item (Join-Path $resSrc '*') $resDst -Recurse -Force
+    Write-Host '已注入 Live Wallpaper 資源（res/xml、res/values）。'
+  }
+}
+else {
+  Write-Warning '找不到產生的 MainActivity.kt，略過原生注入。'
+}
+
+# 注入 WorkManager 依賴 + proguard keep 規則（靜態輪播用）
+# keep 規則避免 release R8 把 WorkManager 的 Room 資料庫類別拿掉導致啟動崩潰。
+Copy-Item (Join-Path $SrcDir 'native\proguard-rules.pro') `
+          (Join-Path $ProjectRoot 'android\app\proguard-rules.pro') -Force
+$appGradle = @('android\app\build.gradle.kts', 'android\app\build.gradle') |
+             ForEach-Object { Join-Path $ProjectRoot $_ } |
+             Where-Object { Test-Path $_ } | Select-Object -First 1
+if ($appGradle) {
+  $g = Get-Content $appGradle -Raw
+  $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+  if ($g -notmatch 'work-runtime') {
+    if ($appGradle -like '*.kts') {
+      $g += "`r`ndependencies {`r`n    implementation(`"androidx.work:work-runtime-ktx:2.9.1`")`r`n}`r`n"
+    }
+    else {
+      $g += "`r`ndependencies {`r`n    implementation `"androidx.work:work-runtime-ktx:2.9.1`"`r`n}`r`n"
+    }
+    Write-Host '已注入 WorkManager 依賴。'
+  }
+  if ($g -notmatch 'WALLPAPER_PROGUARD') {
+    if ($appGradle -like '*.kts') {
+      $g += "`r`n// WALLPAPER_PROGUARD`r`nandroid {`r`n    buildTypes {`r`n        getByName(`"release`") {`r`n            proguardFiles(getDefaultProguardFile(`"proguard-android-optimize.txt`"), `"proguard-rules.pro`")`r`n        }`r`n    }`r`n}`r`n"
+    }
+    else {
+      $g += "`r`n// WALLPAPER_PROGUARD`r`nandroid {`r`n    buildTypes {`r`n        release {`r`n            proguardFiles getDefaultProguardFile(`"proguard-android-optimize.txt`"), `"proguard-rules.pro`"`r`n        }`r`n    }`r`n}`r`n"
+    }
+    Write-Host '已注入 proguard keep 規則。'
+  }
+  [System.IO.File]::WriteAllText($appGradle, $g, $utf8NoBom)
 }
 
 # ---------------------------------------------------------------------------

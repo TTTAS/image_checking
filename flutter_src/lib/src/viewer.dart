@@ -1,13 +1,14 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:video_player/video_player.dart';
 
 import 'collections.dart';
 import 'library.dart';
-import 'native_wallpaper.dart';
 import 'photo_actions.dart';
+import 'wallpaper_crop_page.dart';
+import 'wallpaper_page.dart';
+import 'wallpaper_playlist.dart';
 
 /// Full-screen viewer: swipe between photos, pinch-zoom, and act on a single
 /// photo (favorite / edit / share / hide / delete).
@@ -105,21 +106,28 @@ class _ViewerPageState extends State<ViewerPage> {
     );
   }
 
-  Future<void> _setWallpaper() async {
+  Future<void> _addToPlaylist(List<WallpaperTarget> targets) async {
     final messenger = ScaffoldMessenger.of(context);
-    final uri = await _current.getMediaUrl();
-    if (uri == null) {
-      messenger.showSnackBar(const SnackBar(content: Text('找不到原始圖片')));
-      return;
+    final navigator = Navigator.of(context);
+    var any = false;
+    for (final t in targets) {
+      if (await WallpaperPlaylist.add(_current, t)) any = true;
     }
-    try {
-      // Opens the system cropper, where the user positions the image and
-      // chooses which screen before confirming.
-      await NativeWallpaper.setFromUri(uri);
-    } on PlatformException catch (e) {
-      messenger.showSnackBar(
-          SnackBar(content: Text('設定桌布失敗：${e.message ?? e.code}')));
-    }
+    if (!mounted) return;
+    final label = targets.length >= 2 ? '主畫面與鎖定' : targets.first.label;
+    messenger.showSnackBar(SnackBar(
+      content: Text(any ? '已加入$label輪播' : '無法加入（不支援的格式或已在清單中）'),
+      action: any
+          ? SnackBarAction(
+              label: '檢視',
+              onPressed: () => navigator.push(
+                MaterialPageRoute<void>(
+                    builder: (_) =>
+                        WallpaperPage(initialTarget: targets.first)),
+              ),
+            )
+          : null,
+    ));
   }
 
   Future<Map<String, String>> _collectInfo(AssetEntity a) async {
@@ -167,10 +175,34 @@ class _ViewerPageState extends State<ViewerPage> {
         ),
         actions: [
           if (_current.type != AssetType.video)
-            IconButton(
+            PopupMenuButton<String>(
               icon: const Icon(Icons.wallpaper),
-              tooltip: '設為桌布',
-              onPressed: _setWallpaper,
+              tooltip: '桌布',
+              onSelected: (v) {
+                switch (v) {
+                  case 'single':
+                    Navigator.of(context).push(MaterialPageRoute<void>(
+                      builder: (_) => WallpaperCropPage(asset: _current),
+                    ));
+                    break;
+                  case 'home':
+                    _addToPlaylist([WallpaperTarget.home]);
+                    break;
+                  case 'lock':
+                    _addToPlaylist([WallpaperTarget.lock]);
+                    break;
+                  case 'both':
+                    _addToPlaylist(
+                        [WallpaperTarget.home, WallpaperTarget.lock]);
+                    break;
+                }
+              },
+              itemBuilder: (context) => const [
+                PopupMenuItem(value: 'single', child: Text('設為桌布（單張）')),
+                PopupMenuItem(value: 'home', child: Text('加入主畫面輪播')),
+                PopupMenuItem(value: 'lock', child: Text('加入鎖定輪播')),
+                PopupMenuItem(value: 'both', child: Text('兩邊都加入輪播')),
+              ],
             ),
           IconButton(
             icon: const Icon(Icons.info_outline),

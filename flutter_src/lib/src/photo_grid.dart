@@ -5,6 +5,8 @@ import 'collections.dart';
 import 'library.dart';
 import 'photo_actions.dart';
 import 'selection.dart';
+import 'wallpaper_page.dart';
+import 'wallpaper_playlist.dart';
 import 'widgets.dart';
 
 /// One thumbnail that supports tap-to-open, long-press-to-select, and shows
@@ -113,6 +115,48 @@ AppBar selectionAppBar({
         icon: const Icon(Icons.share_outlined),
         tooltip: '分享',
         onPressed: () => PhotoActions.share(selected()),
+      ),
+      // Wrapped in a Builder so we get a context under the Scaffold for the
+      // SnackBar / navigation without changing this function's signature.
+      Builder(
+        builder: (context) => PopupMenuButton<String>(
+          icon: const Icon(Icons.slideshow_outlined),
+          tooltip: '加入輪播',
+          onSelected: (v) async {
+            final targets = v == 'both'
+                ? [WallpaperTarget.home, WallpaperTarget.lock]
+                : [v == 'lock' ? WallpaperTarget.lock : WallpaperTarget.home];
+            final messenger = ScaffoldMessenger.of(context);
+            final navigator = Navigator.of(context);
+            final chosen = selected();
+            var added = 0;
+            for (final t in targets) {
+              added += await WallpaperPlaylist.addAll(chosen, t);
+            }
+            selection.clear();
+            final label = targets.length >= 2 ? '主畫面與鎖定' : targets.first.label;
+            messenger.showSnackBar(SnackBar(
+              content: Text(added > 0
+                  ? '已加入 $added 筆到$label輪播'
+                  : '沒有可加入的圖片（不支援影片或已在清單中）'),
+              action: added > 0
+                  ? SnackBarAction(
+                      label: '檢視',
+                      onPressed: () => navigator.push(
+                        MaterialPageRoute<void>(
+                            builder: (_) =>
+                                WallpaperPage(initialTarget: targets.first)),
+                      ),
+                    )
+                  : null,
+            ));
+          },
+          itemBuilder: (context) => const [
+            PopupMenuItem(value: 'home', child: Text('加入主畫面輪播')),
+            PopupMenuItem(value: 'lock', child: Text('加入鎖定輪播')),
+            PopupMenuItem(value: 'both', child: Text('兩邊都加入輪播')),
+          ],
+        ),
       ),
       IconButton(
         icon: const Icon(Icons.delete_outline),
