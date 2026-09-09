@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -13,13 +12,15 @@ import 'wallpaper_playlist.dart';
 
 /// In-app wallpaper crop + preview (no system cropper, no external app).
 ///
-/// The image sits inside a crop frame whose aspect ratio matches the screen; the
-/// user pans / pinch-zooms and whatever shows inside the frame is exactly what
-/// gets used (WYSIWYG). On confirm we capture the frame to a screen-sized bitmap.
+/// The image is ALWAYS the original; the crop is stored as a normalized
+/// transform ([initialZoom]/[initialFocusX]/[initialFocusY]) so re-entering
+/// restores the same view and the user can still zoom out (below "cover") to
+/// recover parts that were previously cropped off. On confirm we capture the
+/// crop frame to a screen-sized bitmap (WYSIWYG).
 ///
 /// Two modes:
-///  * playlist ([target] != null): "儲存裁切" saves the crop file into that list
-///    (no wallpaper change); "設為桌布" saves it AND sets that side now
+///  * playlist ([target] != null): "儲存裁切" saves the crop file + transform into
+///    that list (no wallpaper change); "設為桌布" also sets that side now
 ///    (home=FLAG_SYSTEM, lock=FLAG_LOCK).
 ///  * single ([target] == null, from the viewer): a one-off set with a
 ///    home/lock/both chooser; does not touch any playlist.
@@ -28,16 +29,18 @@ class WallpaperCropPage extends StatefulWidget {
     super.key,
     required this.asset,
     this.target,
-    this.basePath,
+    this.initialZoom = 1.0,
+    this.initialFocusX = 0.5,
+    this.initialFocusY = 0.5,
   });
 
   final AssetEntity asset;
   final WallpaperTarget? target;
 
-  /// Playlist mode only: path of this entry's previously-cropped file. If set,
-  /// the crop starts from that saved crop (so re-entering shows the last crop)
-  /// instead of re-covering the original.
-  final String? basePath;
+  /// Saved crop transform to restore (playlist mode). Defaults == cover-centered.
+  final double initialZoom;
+  final double initialFocusX;
+  final double initialFocusY;
 
   @override
   State<WallpaperCropPage> createState() => _WallpaperCropPageState();
@@ -47,24 +50,15 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
   final GlobalKey _cropKey = GlobalKey();
   final TransformationController _transform = TransformationController();
 
-  bool _centered = false;
+  bool _applied = false;
   bool _busy = false;
 
-  bool get _useBase =>
-      _isPlaylist && widget.basePath != null && widget.basePath!.isNotEmpty;
-
-  @override
-  void initState() {
-    super.initState();
-    // Read the latest saved crop, not a stale cached copy of the same path.
-    if (_useBase) {
-      PaintingBinding.instance.imageCache
-          .evict(FileImage(File(widget.basePath!)));
-    }
-  }
-
-  // Single-mode target screens (home only by default). Unused in playlist mode.
+  // Single-mode target screens (home by default). Unused in playlist mode.
   int _flags = kFlagSystem;
+
+  // Cached layout, updated each build; used to convert the transform to/from
+  // normalized (zoom, focus) values.
+  double _bw = 0, _bh = 0, _cw = 0, _ch = 0;
 
   bool get _isPlaylist => widget.target != null;
 
@@ -81,6 +75,27 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
   void dispose() {
     _transform.dispose();
     super.dispose();
+  }
+
+  /// Builds the transform that puts original point (fx,fy) at the crop-box center
+  /// at scale [zoom] (relative to cover). Child coords are the cover-sized box.
+  Matrix4 _matrixFor(double zoom, double fx, double fy) {
+    final tx = _bw / 2 - zoom * (fx * _cw);
+    final ty = _bh / 2 - zoom * (fy * _ch);
+    return Matrix4.identity()
+      ..translate(tx, ty)
+      ..scale(zoom);
+  }
+
+  /// Reads the current (zoom, focusX, focusY) from the live transform.
+  (double, double, double) _currentCrop() {
+    final m = _transform.value;
+    final zoom = m.getMaxScaleOnAxis();
+    final t = m.getTranslation();
+    if (_cw <= 0 || _ch <= 0 || zoom == 0) return (1.0, 0.5, 0.5);
+    final fx = (_bw / 2 - t.x) / (zoom * _cw);
+    final fy = (_bh / 2 - t.y) / (zoom * _ch);
+    return (zoom, fx, fy);
   }
 
   Future<Uint8List> _captureBytes() async {
@@ -104,7 +119,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
         .showSnackBar(SnackBar(content: Text('操作失敗：$m')));
   }
 
-  // Playlist mode: save the crop file only (no wallpaper change).
+  // Playlist mode: save the crop file + transform only (no wallpaper change).
   Future<void> _saveCropOnly() async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -112,9 +127,11 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
     try {
+      final (z, fx, fy) = _currentCrop();
       final bytes = await _captureBytes();
       final path = await NativeWallpaper.saveCrop(bytes, t.key, widget.asset.id);
-      await WallpaperPlaylist.setCropped(t, widget.asset.id, path);
+      await WallpaperPlaylist.setCropped(t, widget.asset.id, path,
+          zoom: z, focusX: fx, focusY: fy);
       if (!mounted) return;
       messenger.showSnackBar(
           const SnackBar(content: Text('已儲存裁切（不會立刻換桌布，下次輪播會用它）')));
@@ -132,9 +149,11 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
     try {
+      final (z, fx, fy) = _currentCrop();
       final bytes = await _captureBytes();
       final path = await NativeWallpaper.saveCrop(bytes, t.key, widget.asset.id);
-      await WallpaperPlaylist.setCropped(t, widget.asset.id, path);
+      await WallpaperPlaylist.setCropped(t, widget.asset.id, path,
+          zoom: z, focusX: fx, focusY: fy);
       final honored = await NativeWallpaper.setWallpaperBytes(bytes, t.flag);
       if (!mounted) return;
       var msg = '已設為${t.label}的桌布，並存為裁切';
@@ -177,13 +196,11 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
     final mq = MediaQuery.of(context);
     final cropAspect = mq.size.width / mq.size.height;
     final screenWpx = (mq.size.width * mq.devicePixelRatio).round();
-    // Re-crop starts from the previously-saved crop file; otherwise the original.
-    final ImageProvider provider = _useBase
-        ? FileImage(File(widget.basePath!))
-        : ResizeImage(
-            AssetEntityImageProvider(widget.asset, isOriginal: true),
-            width: screenWpx,
-          );
+    // Always the original image; capped to the screen width to bound memory.
+    final provider = ResizeImage(
+      AssetEntityImageProvider(widget.asset, isOriginal: true),
+      width: screenWpx,
+    );
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -211,11 +228,9 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                         final boxAspect = bw / bh;
                         final iw = widget.asset.width.toDouble();
                         final ih = widget.asset.height.toDouble();
-                        // A saved crop is already screen-ratio, so treat it as the
-                        // box aspect (fills the frame, showing the last crop).
-                        final imgAspect = _useBase
-                            ? boxAspect
-                            : ((iw > 0 && ih > 0) ? iw / ih : boxAspect);
+                        final imgAspect =
+                            (iw > 0 && ih > 0) ? iw / ih : boxAspect;
+                        // Cover size of the ORIGINAL relative to the crop box.
                         double cw, ch;
                         if (imgAspect > boxAspect) {
                           ch = bh;
@@ -224,19 +239,35 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                           cw = bw;
                           ch = bw / imgAspect;
                         }
-                        if (!_centered) {
-                          _centered = true;
+                        _bw = bw;
+                        _bh = bh;
+                        _cw = cw;
+                        _ch = ch;
+                        // Scale (relative to cover) at which the whole original
+                        // fits inside the box — the minimum, so cut-off parts can
+                        // be recovered.
+                        final fitScale = (bw / cw < bh / ch ? bw / cw : bh / ch);
+                        final minScale = fitScale.clamp(0.05, 1.0);
+                        final maxScale = 6.0;
+
+                        if (!_applied) {
+                          _applied = true;
+                          final z = widget.initialZoom
+                              .clamp(minScale, maxScale)
+                              .toDouble();
                           WidgetsBinding.instance.addPostFrameCallback((_) {
-                            _transform.value = Matrix4.identity()
-                              ..translate(-(cw - bw) / 2, -(ch - bh) / 2);
+                            _transform.value = _matrixFor(
+                                z, widget.initialFocusX, widget.initialFocusY);
                           });
                         }
+
                         return InteractiveViewer(
                           transformationController: _transform,
                           constrained: false,
                           clipBehavior: Clip.hardEdge,
-                          minScale: 1.0,
-                          maxScale: 6.0,
+                          boundaryMargin: const EdgeInsets.all(double.infinity),
+                          minScale: minScale,
+                          maxScale: maxScale,
                           child: SizedBox(
                             width: cw,
                             height: ch,
@@ -262,7 +293,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Text(
-              '拖曳移動、雙指縮放；框內就是會被設成桌布的範圍。',
+              '拖曳移動、雙指縮放（可縮小把被切掉的部分拿回來）；框內就是會被設成桌布的範圍。',
               style: TextStyle(color: Colors.white70, fontSize: 12),
               textAlign: TextAlign.center,
             ),

@@ -35,6 +35,9 @@ class WallpaperItem {
     required this.mime,
     required this.animated,
     this.filePath = '',
+    this.cropZoom = 1.0,
+    this.cropFocusX = 0.5,
+    this.cropFocusY = 0.5,
   });
 
   /// Source photo's asset id.
@@ -48,6 +51,17 @@ class WallpaperItem {
   final String mime;
   bool animated;
 
+  /// Normalized crop transform so re-cropping starts from the ORIGINAL image at
+  /// the same view (device-independent):
+  ///  - [cropZoom]: scale relative to "cover" (1 = just covers the crop box;
+  ///    <1 = zoomed out so the whole original fits, letterboxed).
+  ///  - [cropFocusX]/[cropFocusY]: the original-image point (0..1) that sits at
+  ///    the crop box's center.
+  /// Defaults (1, 0.5, 0.5) == cover-centered, i.e. a plain center crop.
+  double cropZoom;
+  double cropFocusX;
+  double cropFocusY;
+
   bool get cropped => filePath.isNotEmpty;
 
   Map<String, dynamic> toJson() => {
@@ -55,6 +69,9 @@ class WallpaperItem {
         'filePath': filePath,
         'mime': mime,
         'animated': animated,
+        'cropZoom': cropZoom,
+        'cropFocusX': cropFocusX,
+        'cropFocusY': cropFocusY,
       };
 
   static WallpaperItem fromJson(Map<String, dynamic> j) => WallpaperItem(
@@ -62,6 +79,9 @@ class WallpaperItem {
         filePath: (j['filePath'] as String?) ?? '',
         mime: (j['mime'] as String?) ?? '',
         animated: (j['animated'] as bool?) ?? false,
+        cropZoom: (j['cropZoom'] as num?)?.toDouble() ?? 1.0,
+        cropFocusX: (j['cropFocusX'] as num?)?.toDouble() ?? 0.5,
+        cropFocusY: (j['cropFocusY'] as num?)?.toDouble() ?? 0.5,
       );
 }
 
@@ -250,14 +270,24 @@ class WallpaperPlaylist {
     }
   }
 
-  /// Records the cropped file path for an entry in [t].
+  /// Records the cropped file path (and, when given, the normalized crop
+  /// transform) for an entry in [t].
   static Future<void> setCropped(
-      WallpaperTarget t, String id, String path) async {
+    WallpaperTarget t,
+    String id,
+    String path, {
+    double? zoom,
+    double? focusX,
+    double? focusY,
+  }) async {
     final list = listFor(t);
     final next = List<WallpaperItem>.from(list.value);
     final i = next.indexWhere((e) => e.id == id);
     if (i < 0) return;
     next[i].filePath = path;
+    if (zoom != null) next[i].cropZoom = zoom;
+    if (focusX != null) next[i].cropFocusX = focusX;
+    if (focusY != null) next[i].cropFocusY = focusY;
     list.value = next;
     await _persist();
   }

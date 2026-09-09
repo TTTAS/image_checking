@@ -41,7 +41,9 @@ class _WallpaperPageState extends State<WallpaperPage> {
       builder: (_) => WallpaperCropPage(
         asset: asset,
         target: target,
-        basePath: item.filePath.isEmpty ? null : item.filePath,
+        initialZoom: item.cropZoom,
+        initialFocusX: item.cropFocusX,
+        initialFocusY: item.cropFocusY,
       ),
     ));
   }
