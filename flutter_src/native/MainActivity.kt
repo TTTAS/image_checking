@@ -20,6 +20,7 @@ import java.util.concurrent.TimeUnit
 /// Adds a "photo_album/native" MethodChannel so Dart can:
 ///  - check / request the "All files access" (MANAGE_EXTERNAL_STORAGE) permission
 ///  - rename a real folder on disk and ask MediaStore to reindex it
+///  - create a Pictures subfolder and move files into a folder
 ///
 /// This file is copied over the generated MainActivity by the CI workflow, with
 /// __PACKAGE__ replaced by the app's real package name.
@@ -43,6 +44,24 @@ class MainActivity : FlutterActivity() {
                             result.error("ARGS", "oldPath / newName required", null)
                         } else {
                             renameFolder(oldPath, newName, result)
+                        }
+                    }
+                    "picturesDir" -> result.success(picturesDir().absolutePath)
+                    "createFolder" -> {
+                        val name = call.argument<String>("name")
+                        if (name == null) {
+                            result.error("ARGS", "name required", null)
+                        } else {
+                            createFolder(name, result)
+                        }
+                    }
+                    "moveFiles" -> {
+                        val srcPaths = call.argument<List<String>>("srcPaths")
+                        val destDir = call.argument<String>("destDir")
+                        if (srcPaths == null || destDir == null) {
+                            result.error("ARGS", "srcPaths / destDir required", null)
+                        } else {
+                            moveFiles(srcPaths, destDir, result)
                         }
                     }
                     "setWallpaperBytes" -> {
@@ -130,10 +149,106 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    /// Sets an already-cropped image (PNG/JPEG bytes, sized to the screen by the
-    /// Dart crop page) as the wallpaper for [flags] (1=home, 2=lock, 3=both).
-    /// Pure decode + WallpaperManager.setBitmap — never opens any system UI or
-    /// external app. Runs off the main thread (decode can be heavy).
+    private fun picturesDir(): File {
+        return Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+    }
+
+    private fun safeFolderName(name: String): String? {
+        val safe = name.trim()
+        if (safe.isEmpty() || safe.contains('/') || safe.contains('\\') ||
+            safe == "." || safe == ".."
+        ) {
+            return null
+        }
+        return safe
+    }
+
+    private fun createFolder(name: String, result: MethodChannel.Result) {
+        val safe = safeFolderName(name)
+        if (safe == null) {
+            result.error("BAD_NAME", "名稱不合法", null)
+            return
+        }
+        try {
+            val dir = File(picturesDir(), safe)
+            if (!dir.exists() && !dir.mkdirs()) {
+                result.error("CREATE_FAILED", "無法建立資料夾", null)
+                return
+            }
+            MediaScannerConnection.scanFile(
+                applicationContext,
+                arrayOf(dir.absolutePath),
+                null,
+                null,
+            )
+            result.success(dir.absolutePath)
+        } catch (e: Exception) {
+            result.error("EXCEPTION", e.message, null)
+        }
+    }
+
+    private fun uniqueTarget(dest: File, originalName: String): File {
+        val candidate = File(dest, originalName)
+        if (!candidate.exists()) return candidate
+        val dot = originalName.lastIndexOf('.')
+        val base = if (dot > 0) originalName.substring(0, dot) else originalName
+        val ext = if (dot > 0) originalName.substring(dot) else ""
+        var i = 1
+        while (true) {
+            val next = File(dest, "${base}_$i$ext")
+            if (!next.exists()) return next
+            i++
+        }
+    }
+
+    /// Physically moves files into [destDir], then asks MediaStore to reindex
+    /// both the old and new paths so the folder tab picks the change up.
+    private fun moveFiles(srcPaths: List<String>, destDir: String, result: MethodChannel.Result) {
+        Thread {
+            try {
+                val dest = File(destDir)
+                if (!dest.exists() && !dest.mkdirs()) {
+                    runOnUiThread { result.error("CREATE_FAILED", "無法建立目標資料夾", null) }
+                    return@Thread
+                }
+                if (!dest.isDirectory) {
+                    runOnUiThread { result.error("NOT_DIR", "目標不是資料夾", null) }
+                    return@Thread
+                }
+                var moved = 0
+                val scan = mutableListOf<String>()
+                for (src in srcPaths) {
+                    val file = File(src)
+                    if (!file.exists() || !file.isFile) continue
+                    if (file.parentFile?.absolutePath == dest.absolutePath) {
+                        moved++
+                        continue
+                    }
+                    val target = uniqueTarget(dest, file.name)
+                    val ok = file.renameTo(target)
+                    if (!ok) {
+                        file.copyTo(target, overwrite = false)
+                        file.delete()
+                    }
+                    scan.add(src)
+                    scan.add(target.absolutePath)
+                    moved++
+                }
+                if (scan.isNotEmpty()) {
+                    MediaScannerConnection.scanFile(
+                        applicationContext,
+                        scan.toTypedArray(),
+                        null,
+                        null,
+                    )
+                }
+                runOnUiThread { result.success(moved) }
+            } catch (e: Exception) {
+                runOnUiThread { result.error("EXCEPTION", e.message, null) }
+            }
+        }.start()
+    }
+
     private fun setWallpaperBytes(bytes: ByteArray, flags: Int, result: MethodChannel.Result) {
         Thread {
             try {
@@ -145,7 +260,6 @@ class MainActivity : FlutterActivity() {
         }.start()
     }
 
-    /// Runs [work] on a background thread and returns its String result to Dart.
     private fun runOffThread(result: MethodChannel.Result, work: () -> String) {
         Thread {
             try {
@@ -157,9 +271,6 @@ class MainActivity : FlutterActivity() {
         }.start()
     }
 
-    /// Static rotation for two lists (home / lock). Writes the manifest, sets the
-    /// first of each side now, and schedules the periodic advance. The cropped
-    /// files already live in the app's private dir, so nothing is copied here.
     private fun applyRotation(
         home: List<String>,
         lock: List<String>,
@@ -182,8 +293,6 @@ class MainActivity : FlutterActivity() {
         }.start()
     }
 
-    /// Schedules (or replaces) the periodic rotation job. WorkManager's real
-    /// floor is ~15 minutes, so anything shorter is clamped up.
     private fun scheduleRotation(intervalMinutes: Int) {
         val minutes = intervalMinutes.toLong().coerceAtLeast(15L)
         val request = PeriodicWorkRequest.Builder(
@@ -198,9 +307,6 @@ class MainActivity : FlutterActivity() {
         )
     }
 
-    /// Live wallpaper (mode B): copy originals + write the live manifest off the
-    /// main thread. The user still has to confirm in the system preview
-    /// (openLiveWallpaperPreview) — the app cannot set a live wallpaper silently.
     private fun applyLive(
         items: List<Map<String, Any?>>,
         seconds: Int,
@@ -222,9 +328,6 @@ class MainActivity : FlutterActivity() {
         }.start()
     }
 
-    /// Opens the system "choose live wallpaper" preview for our service. This is
-    /// the ACTION_CHANGE_LIVE_WALLPAPER picker (NOT getCropAndSetWallpaperIntent);
-    /// the user must press "設定" there — the app cannot apply it silently.
     private fun openLiveWallpaperPreview(result: MethodChannel.Result) {
         try {
             val intent = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
@@ -261,7 +364,6 @@ class MainActivity : FlutterActivity() {
                 result.error("RENAME_FAILED", "改名失敗（可能沒有權限或跨儲存區）", null)
                 return
             }
-            // Ask MediaStore to drop the old paths and pick up the new ones.
             val paths = mutableListOf(oldPath, target.absolutePath)
             target.walkTopDown().forEach { if (it.isFile) paths.add(it.absolutePath) }
             MediaScannerConnection.scanFile(applicationContext, paths.toTypedArray(), null, null)

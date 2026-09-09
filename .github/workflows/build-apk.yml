@@ -29,7 +29,7 @@ jobs:
 
       - name: Assemble Flutter project from flutter_src
         run: |
-          flutter create --platforms=android --project-name photo_album --org com.example.photoalbum .
+          flutter create --platforms=android --project-name photo_album --org com.tttas.photoalbum .
           cp flutter_src/pubspec.yaml pubspec.yaml
           rm -rf lib
           cp -r flutter_src/lib lib

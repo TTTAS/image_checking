@@ -8,6 +8,7 @@ import 'library.dart';
 import 'photo_actions.dart';
 import 'wallpaper_crop_page.dart';
 import 'wallpaper_page.dart';
+import 'move_folder.dart';
 import 'wallpaper_playlist.dart';
 
 /// Full-screen viewer: swipe between photos, pinch-zoom, and act on a single
@@ -50,8 +51,6 @@ class _ViewerPageState extends State<ViewerPage> {
   Future<void> _delete() async {
     final deleted = await PhotoActions.delete([_current]);
     if (deleted.isEmpty) return;
-    // Update the shared library so the grid behind us reflects the deletion
-    // without a rescan when we pop back.
     PhotoLibrary.instance.removeIds(deleted);
     if (!mounted) return;
     setState(() {
@@ -174,6 +173,23 @@ class _ViewerPageState extends State<ViewerPage> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.drive_file_move_outline),
+            tooltip: '移到資料夾',
+            onPressed: () async {
+              final result = await MoveFolder.pickAndMove(context, [_current]);
+              if (result == null || !mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    result.moved > 0
+                        ? '已移到「${result.destName}」'
+                        : '沒有檔案被移動',
+                  ),
+                ),
+              );
+            },
+          ),
           if (_current.type != AssetType.video)
             PopupMenuButton<String>(
               icon: const Icon(Icons.wallpaper),
