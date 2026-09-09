@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import 'folder_covers.dart';
+import 'folder_names.dart';
 import 'library.dart';
 import 'media.dart';
 import 'native_folder.dart';
+import 'widgets.dart';
 
 class MoveResult {
   const MoveResult({required this.moved, required this.destName});
@@ -13,11 +16,9 @@ class MoveResult {
 }
 
 /// Lets the user pick (or create) a physical folder, then moves the selected
-/// photos into it. Needs "All files access" — same permission as renaming a
+/// photos into it. Needs All files access — same permission as renaming a
 /// folder on disk.
 class MoveFolder {
-  /// Shows the folder picker and runs the move. Returns null if the user
-  /// cancelled or permission was not granted.
   static Future<MoveResult?> pickAndMove(
     BuildContext context,
     List<AssetEntity> assets,
@@ -51,11 +52,8 @@ class MoveFolder {
     }
 
     if (!context.mounted) return null;
-    final target = await showModalBottomSheet<_MoveTarget>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (ctx) => const _FolderPickerSheet(),
+    final target = await Navigator.of(context).push<_MoveTarget>(
+      MaterialPageRoute(builder: (_) => const _FolderPickerPage()),
     );
     if (target == null) return null;
 
@@ -97,22 +95,55 @@ class _MoveTarget {
   final String dirPath;
 }
 
-class _FolderPickerSheet extends StatefulWidget {
-  const _FolderPickerSheet();
-
-  @override
-  State<_FolderPickerSheet> createState() => _FolderPickerSheetState();
+class _PickerFolder {
+  _PickerFolder(this.path, this.count);
+  final AssetPathEntity path;
+  final int count;
 }
 
-class _FolderPickerSheetState extends State<_FolderPickerSheet> {
-  List<_MoveTarget> _folders = [];
+/// Full-screen picker that mirrors the Folders tab: cover grid + search.
+class _FolderPickerPage extends StatefulWidget {
+  const _FolderPickerPage();
+
+  @override
+  State<_FolderPickerPage> createState() => _FolderPickerPageState();
+}
+
+class _FolderPickerPageState extends State<_FolderPickerPage> {
+  final TextEditingController _searchCtrl = TextEditingController();
+  final Map<String, AssetEntity?> _coverCache = {};
+  List<_PickerFolder> _folders = [];
   bool _loading = true;
+  bool _searching = false;
+  String _query = '';
   String? _error;
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  String _displayName(AssetPathEntity path) =>
+      FolderNames.nameOf(path.id) ?? path.name;
+
+  List<_PickerFolder> get _visible {
+    final q = _query.trim().toLowerCase();
+    final list = _folders.where((f) {
+      if (q.isEmpty) return true;
+      return _displayName(f.path).toLowerCase().contains(q) ||
+          f.path.name.toLowerCase().contains(q);
+    }).toList();
+    list.sort((a, b) => _displayName(a.path)
+        .toLowerCase()
+        .compareTo(_displayName(b.path).toLowerCase()));
+    return list;
   }
 
   Future<void> _load() async {
@@ -125,22 +156,12 @@ class _FolderPickerSheetState extends State<_FolderPickerSheet> {
         type: kMediaType,
         hasAll: false,
       );
-      final folders = <_MoveTarget>[];
-      final seen = <String>{};
+      final folders = <_PickerFolder>[];
       for (final p in paths) {
         final count = await p.assetCountAsync;
-        if (count <= 0) continue;
-        final first = await p.getAssetListRange(start: 0, end: 1);
-        if (first.isEmpty) continue;
-        final file = await first.first.file;
-        if (file == null) continue;
-        final dir = file.parent.path;
-        if (!seen.add(dir)) continue;
-        folders.add(_MoveTarget(p.name, dir));
+        if (count > 0) folders.add(_PickerFolder(p, count));
       }
-      folders.sort(
-        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-      );
+      _coverCache.clear();
       if (!mounted) return;
       setState(() {
         _folders = folders;
@@ -153,6 +174,53 @@ class _FolderPickerSheetState extends State<_FolderPickerSheet> {
         _loading = false;
       });
     }
+  }
+
+  Future<AssetEntity?> _cover(AssetPathEntity path) async {
+    if (_coverCache.containsKey(path.id)) return _coverCache[path.id];
+    final count = await path.assetCountAsync;
+    final assets = await path.getAssetListRange(start: 0, end: count);
+
+    AssetEntity? cover;
+    final chosenId = FolderCovers.coverOf(path.id);
+    if (chosenId != null) {
+      for (final a in assets) {
+        if (a.id == chosenId) {
+          cover = a;
+          break;
+        }
+      }
+    }
+    if (cover == null) {
+      assets.sort((a, b) => (a.title ?? '')
+          .toLowerCase()
+          .compareTo((b.title ?? '').toLowerCase()));
+      cover = assets.isEmpty ? null : assets.first;
+    }
+    _coverCache[path.id] = cover;
+    return cover;
+  }
+
+  Future<void> _pick(_PickerFolder folder) async {
+    final first = await folder.path.getAssetListRange(start: 0, end: 1);
+    if (!mounted) return;
+    if (first.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('這個資料夾是空的')),
+      );
+      return;
+    }
+    final file = await first.first.file;
+    if (!mounted) return;
+    if (file == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('找不到這個資料夾的實體路徑')),
+      );
+      return;
+    }
+    Navigator.of(context).pop(
+      _MoveTarget(_displayName(folder.path), file.parent.path),
+    );
   }
 
   Future<void> _create() async {
@@ -196,35 +264,67 @@ class _FolderPickerSheetState extends State<_FolderPickerSheet> {
     }
   }
 
+  void _startSearch() => setState(() => _searching = true);
+
+  void _stopSearch() {
+    _searchCtrl.clear();
+    setState(() {
+      _searching = false;
+      _query = '';
+    });
+  }
+
+  PreferredSizeWidget _appBar() {
+    if (_searching) {
+      return AppBar(
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back),
+          onPressed: _stopSearch,
+        ),
+        title: TextField(
+          controller: _searchCtrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '搜尋資料夾名稱',
+            border: InputBorder.none,
+          ),
+          onChanged: (v) => setState(() => _query = v),
+        ),
+        actions: [
+          if (_query.isNotEmpty)
+            IconButton(
+              icon: const Icon(Icons.clear),
+              tooltip: '清除',
+              onPressed: () {
+                _searchCtrl.clear();
+                setState(() => _query = '');
+              },
+            ),
+        ],
+      );
+    }
+    return AppBar(
+      title: const Text('移到資料夾'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.search),
+          tooltip: '搜尋',
+          onPressed: _startSearch,
+        ),
+        IconButton(
+          icon: const Icon(Icons.create_new_folder_outlined),
+          tooltip: '新增資料夾',
+          onPressed: _create,
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final height = MediaQuery.of(context).size.height * 0.7;
-    return SizedBox(
-      height: height,
-      child: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 8, 8),
-            child: Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    '移到資料夾',
-                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-                  ),
-                ),
-                TextButton.icon(
-                  onPressed: _create,
-                  icon: const Icon(Icons.create_new_folder_outlined),
-                  label: const Text('新增'),
-                ),
-              ],
-            ),
-          ),
-          const Divider(height: 1),
-          Expanded(child: _body()),
-        ],
-      ),
+    return Scaffold(
+      appBar: _appBar(),
+      body: _body(),
     );
   }
 
@@ -238,17 +338,84 @@ class _FolderPickerSheetState extends State<_FolderPickerSheet> {
     if (_folders.isEmpty) {
       return const Center(child: Text('還沒有可選的資料夾，先按右上角新增'));
     }
-    return ListView.builder(
-      itemCount: _folders.length,
+    final visible = _visible;
+    if (visible.isEmpty) {
+      return const Center(child: Text('找不到符合的資料夾'));
+    }
+    return GridView.builder(
+      padding: const EdgeInsets.all(8),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 2,
+        crossAxisSpacing: 8,
+        mainAxisSpacing: 12,
+        childAspectRatio: 0.82,
+      ),
+      itemCount: visible.length,
       itemBuilder: (context, i) {
-        final f = _folders[i];
-        return ListTile(
-          leading: const Icon(Icons.folder_outlined),
-          title: Text(f.name),
-          subtitle: Text(f.dirPath, maxLines: 1, overflow: TextOverflow.ellipsis),
-          onTap: () => Navigator.of(context).pop(f),
+        final folder = visible[i];
+        return _PickerCard(
+          folder: folder.path,
+          count: folder.count,
+          coverLoader: () => _cover(folder.path),
+          onTap: () => _pick(folder),
         );
       },
+    );
+  }
+}
+
+class _PickerCard extends StatelessWidget {
+  const _PickerCard({
+    required this.folder,
+    required this.count,
+    required this.coverLoader,
+    required this.onTap,
+  });
+
+  final AssetPathEntity folder;
+  final int count;
+  final Future<AssetEntity?> Function() coverLoader;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: FutureBuilder<AssetEntity?>(
+                future: coverLoader(),
+                builder: (context, snap) {
+                  final cover = snap.data;
+                  if (cover == null) {
+                    return Container(
+                      color:
+                          Theme.of(context).colorScheme.surfaceContainerHighest,
+                      child: const Icon(Icons.folder_outlined, size: 36),
+                    );
+                  }
+                  return PhotoThumb(asset: cover, side: 400);
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            FolderNames.nameOf(folder.id) ?? folder.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w500),
+          ),
+          Text(
+            '$count 張',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
     );
   }
 }
