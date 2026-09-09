@@ -1,7 +1,8 @@
 import 'package:flutter/services.dart';
 
 /// Bridge to the native (Kotlin) side for operations photo_manager cannot do:
-/// requesting "All files access" and renaming a real folder on disk.
+/// requesting "All files access", renaming a real folder, creating a folder,
+/// and moving files into a folder on disk.
 class NativeFolder {
   NativeFolder._();
 
@@ -31,5 +32,30 @@ class NativeFolder {
       'newName': newName,
     });
     return result ?? '';
+  }
+
+  /// Public Pictures directory, e.g. /storage/emulated/0/Pictures.
+  static Future<String> picturesDir() async {
+    final result = await _channel.invokeMethod<String>('picturesDir');
+    return result ?? '';
+  }
+
+  /// Creates [name] under Pictures (or returns it if it already exists).
+  /// Returns the new folder's absolute path.
+  static Future<String> createFolder(String name) async {
+    final result = await _channel.invokeMethod<String>('createFolder', {
+      'name': name,
+    });
+    return result ?? '';
+  }
+
+  /// Moves each file in [srcPaths] into [destDir]. Same-name files get a
+  /// numeric suffix. Returns how many files actually landed in [destDir].
+  static Future<int> moveFiles(List<String> srcPaths, String destDir) async {
+    final result = await _channel.invokeMethod<int>('moveFiles', {
+      'srcPaths': srcPaths,
+      'destDir': destDir,
+    });
+    return result ?? 0;
   }
 }
