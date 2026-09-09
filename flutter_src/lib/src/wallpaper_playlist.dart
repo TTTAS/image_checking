@@ -5,13 +5,9 @@ import 'package:flutter/foundation.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// WallpaperManager screen flags (match Android's values so native can pass them
-/// straight through).
-const int kFlagSystem = 1; // home screen
-const int kFlagLock = 2; // lock screen
+const int kFlagSystem = 1;
+const int kFlagLock = 2;
 
-/// Which screen a playlist / crop belongs to. Home and lock are independent
-/// lists, each cropped and rotated separately.
 enum WallpaperTarget { home, lock }
 
 extension WallpaperTargetX on WallpaperTarget {
@@ -20,7 +16,6 @@ extension WallpaperTargetX on WallpaperTarget {
   String get label => this == WallpaperTarget.home ? '主畫面' : '鎖定';
 }
 
-/// Image types accepted into the playlist. Videos are excluded.
 const Set<String> kWallpaperMimes = {
   'image/jpeg',
   'image/png',
@@ -28,7 +23,6 @@ const Set<String> kWallpaperMimes = {
   'image/gif',
 };
 
-/// One entry in a wallpaper playlist.
 class WallpaperItem {
   WallpaperItem({
     required this.id,
@@ -40,24 +34,10 @@ class WallpaperItem {
     this.cropFocusY = 0.5,
   });
 
-  /// Source photo's asset id.
   final String id;
-
-  /// Path of the user-cropped image saved in the app's private dir
-  /// (filesDir/wallpaper_playlist/<home|lock>/<id>.jpg). Empty until the user
-  /// crops it (or the first apply center-crops and stores one).
   String filePath;
-
   final String mime;
   bool animated;
-
-  /// Normalized crop transform so re-cropping starts from the ORIGINAL image at
-  /// the same view (device-independent):
-  ///  - [cropZoom]: scale relative to "cover" (1 = just covers the crop box;
-  ///    <1 = zoomed out so the whole original fits, letterboxed).
-  ///  - [cropFocusX]/[cropFocusY]: the original-image point (0..1) that sits at
-  ///    the crop box's center.
-  /// Defaults (1, 0.5, 0.5) == cover-centered, i.e. a plain center crop.
   double cropZoom;
   double cropFocusX;
   double cropFocusY;
@@ -85,7 +65,6 @@ class WallpaperItem {
       );
 }
 
-/// Rotation settings shared by both lists.
 class WallpaperSettings {
   WallpaperSettings({
     this.live = false,
@@ -95,19 +74,10 @@ class WallpaperSettings {
     this.loopsBeforeNext = 1,
   });
 
-  /// false = static rotation (WorkManager); true = dynamic Live Wallpaper.
   bool live;
-
-  /// Static: minutes between swaps. WorkManager's real floor is ~15 min.
   int intervalMinutes;
   bool shuffle;
-
-  /// Dynamic: seconds each item plays before advancing (0 = use [loopsBeforeNext]
-  /// instead). When > 0 it takes precedence over loops.
   int liveSeconds;
-
-  /// Dynamic: number of animation loops before advancing (used when
-  /// [liveSeconds] == 0). Static images fall back to a default duration.
   int loopsBeforeNext;
 
   WallpaperSettings copyWith({
@@ -142,16 +112,13 @@ class WallpaperSettings {
       );
 }
 
-/// Two independent playlists (home / lock) plus shared settings, persisted via
-/// SharedPreferences. Cropped image files live in the app's private dir and are
-/// written by the native side; here we only track their paths.
 class WallpaperPlaylist {
   WallpaperPlaylist._();
 
   static const _homeKey = 'wallpaper_home_items';
   static const _lockKey = 'wallpaper_lock_items';
   static const _settingsKey = 'wallpaper_playlist_settings';
-  static const _oldItemsKey = 'wallpaper_playlist_items'; // pre-split single list
+  static const _oldItemsKey = 'wallpaper_playlist_items';
 
   static final ValueNotifier<List<WallpaperItem>> homeItems =
       ValueNotifier<List<WallpaperItem>>([]);
@@ -181,9 +148,7 @@ class WallpaperPlaylist {
     final rawLock = p.getString(_lockKey);
 
     if (rawHome == null && rawLock == null) {
-      // Migrate the old single list (if any) into the home list.
       final old = parse(p.getString(_oldItemsKey));
-      // Old entries were never really cropped; start fresh on filePath.
       for (final it in old) {
         it.filePath = '';
       }
@@ -222,22 +187,18 @@ class WallpaperPlaylist {
   static bool contains(WallpaperTarget t, String id) =>
       listFor(t).value.any((e) => e.id == id);
 
-  /// Adds one asset to [t]. Returns true if added (false if unsupported or
-  /// already present).
   static Future<bool> add(AssetEntity asset, WallpaperTarget t) async {
     if (!accepts(asset) || contains(t, asset.id)) return false;
     final mime = _mimeOf(asset);
     final list = listFor(t);
     list.value = [
       ...list.value,
-      WallpaperItem(id: asset.id, mime: mime, animated: _isGif(mime)),
+      WallpaperItem(id: asset.id, mime: mime, animated: _looksAnimated(mime)),
     ];
     await _persist();
     return true;
   }
 
-  /// Adds several assets to [t], skipping unsupported / duplicates. Returns how
-  /// many were added.
   static Future<int> addAll(
       Iterable<AssetEntity> assets, WallpaperTarget t) async {
     final list = listFor(t);
@@ -247,7 +208,7 @@ class WallpaperPlaylist {
     for (final a in assets) {
       if (!accepts(a) || have.contains(a.id)) continue;
       final mime = _mimeOf(a);
-      next.add(WallpaperItem(id: a.id, mime: mime, animated: _isGif(mime)));
+      next.add(WallpaperItem(id: a.id, mime: mime, animated: _looksAnimated(mime)));
       have.add(a.id);
       added++;
     }
@@ -265,8 +226,6 @@ class WallpaperPlaylist {
     final next = List<WallpaperItem>.from(list.value)..removeAt(index);
     list.value = next;
     await _persist();
-    // Delete this entry's cropped cache file (app-private jpg, NOT the gallery
-    // original). Ignore failures.
     await _deleteCrop(removed.filePath);
   }
 
@@ -293,19 +252,14 @@ class WallpaperPlaylist {
     }
   }
 
-  /// Deletes a cropped cache file (app-private). Never touches gallery originals.
   static Future<void> _deleteCrop(String path) async {
     if (path.isEmpty) return;
     try {
       final f = File(path);
       if (await f.exists()) await f.delete();
-    } catch (_) {
-      // best-effort
-    }
+    } catch (_) {}
   }
 
-  /// Records the cropped file path (and, when given, the normalized crop
-  /// transform) for an entry in [t].
   static Future<void> setCropped(
     WallpaperTarget t,
     String id,
@@ -331,8 +285,6 @@ class WallpaperPlaylist {
     await _persist();
   }
 
-  // ---- helpers ----------------------------------------------------------
-
   static String _mimeOf(AssetEntity asset) {
     final m = asset.mimeType?.toLowerCase();
     if (m != null && m.isNotEmpty) return m;
@@ -344,5 +296,8 @@ class WallpaperPlaylist {
     return '';
   }
 
-  static bool _isGif(String mime) => mime == 'image/gif';
+  static bool _looksAnimated(String mime) {
+    final m = mime.toLowerCase();
+    return m.contains('gif') || m.contains('webp');
+  }
 }
