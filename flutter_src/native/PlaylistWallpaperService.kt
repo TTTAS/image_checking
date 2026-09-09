@@ -4,30 +4,24 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Movie
 import android.graphics.drawable.AnimatedImageDrawable
-import android.graphics.drawable.Animatable2
 import android.graphics.drawable.Drawable
 import android.graphics.ImageDecoder
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.service.wallpaper.WallpaperService
+import android.util.Log
 import android.view.SurfaceHolder
 import org.json.JSONObject
 import java.io.File
 
-/// Dynamic (Live) wallpaper for mode B: plays the HOME playlist's animated
-/// images (GIF / animated WebP) using API 28+ ImageDecoder / AnimatedImageDrawable.
-///
-/// Reads filesDir/wallpaper_live.json (written by WallpaperStore.applyLive), which
-/// lists copied ORIGINAL files plus each item's normalized crop transform
-/// (zoom / focusX / focusY). Frames are drawn to the wallpaper canvas with that
-/// transform (clip), so animation is preserved (we never use the flattened crop
-/// jpg here). Only animates while visible; advances to the next item after
-/// liveSeconds (precedence) or loopsBeforeNext loops. Bad / missing files are
-/// skipped without crashing.
+/// Live wallpaper: plays the HOME playlist (GIF / animated WebP / stills).
+/// Visible-only 16ms draw loop. GIFs use Movie.setTime; WebP uses ImageDecoder
+/// SOFTWARE bitmaps. Returning to home restarts the current item from frame 0.
 class PlaylistWallpaperService : WallpaperService() {
-    // Nested (not inner) so it can live alongside the inner Engine class.
     private data class Item(
         val path: String,
         val zoom: Float,
@@ -40,6 +34,7 @@ class PlaylistWallpaperService : WallpaperService() {
 
     inner class PlaylistEngine : WallpaperService.Engine() {
         private val handler = Handler(Looper.getMainLooper())
+        private val tag = "PlaylistWP"
 
         private val items = mutableListOf<Item>()
         private var order = mutableListOf<Int>()
@@ -52,20 +47,21 @@ class PlaylistWallpaperService : WallpaperService() {
         private var surfaceH = 0
 
         private var drawable: Drawable? = null
-        // Precomputed draw transform for the current item.
+        private var movie: Movie? = null
+        private var still: Bitmap? = null
+        private var movieStart = 0L
+
         private var drawScale = 1f
         private var drawLeft = 0f
         private var drawTop = 0f
         private var imgW = 0
         private var imgH = 0
 
-        private val invalidateCb = object : Drawable.Callback {
-            override fun invalidateDrawable(who: Drawable) = drawOnce()
-            override fun scheduleDrawable(who: Drawable, what: Runnable, at: Long) {
-                handler.postAtTime(what, at)
-            }
-            override fun unscheduleDrawable(who: Drawable, what: Runnable) {
-                handler.removeCallbacks(what)
+        private val tick = object : Runnable {
+            override fun run() {
+                if (!visible) return
+                drawFrame()
+                handler.postDelayed(this, 16L)
             }
         }
 
@@ -103,7 +99,10 @@ class PlaylistWallpaperService : WallpaperService() {
             items.clear()
             try {
                 val f = File(filesDir, "wallpaper_live.json")
-                if (!f.exists()) return
+                if (!f.exists()) {
+                    Log.w(tag, "no wallpaper_live.json")
+                    return
+                }
                 val root = JSONObject(f.readText())
                 seconds = root.optInt("seconds", 30)
                 loops = root.optInt("loops", 1).coerceAtLeast(1)
@@ -123,7 +122,9 @@ class PlaylistWallpaperService : WallpaperService() {
                 order = (0 until items.size).toMutableList()
                 if (root.optBoolean("shuffle", false)) order.shuffle()
                 pos = 0
-            } catch (_: Exception) {
+                Log.i(tag, "loaded ${items.size} items seconds=$seconds")
+            } catch (e: Exception) {
+                Log.e(tag, "loadManifest", e)
                 items.clear()
             }
         }
@@ -138,6 +139,8 @@ class PlaylistWallpaperService : WallpaperService() {
             }
             drawable?.callback = null
             drawable = null
+            movie = null
+            still = null
         }
 
         private fun advance() {
@@ -146,8 +149,6 @@ class PlaylistWallpaperService : WallpaperService() {
             playCurrent(0)
         }
 
-        /// Plays the item at the current position. [attempt] guards against an all-
-        /// bad list (skip broken files, but don't loop forever).
         private fun playCurrent(attempt: Int) {
             stopAll()
             if (!visible || surfaceW <= 0 || surfaceH <= 0) return
@@ -158,77 +159,96 @@ class PlaylistWallpaperService : WallpaperService() {
             val item = items.getOrNull(order[pos]) ?: return
             val file = File(item.path)
             if (!file.exists()) {
+                Log.w(tag, "missing ${item.path}")
                 pos = (pos + 1) % order.size
                 playCurrent(attempt + 1)
                 return
             }
             try {
-                if (item.animated && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                    playAnimated(file, item)
+                val wantAnim = item.animated || looksAnimated(file)
+                if (wantAnim && tryPlayGifMovie(file, item)) {
+                    // ok
+                } else if (wantAnim && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                    tryPlayAnimatedDrawable(file, item)
+                ) {
+                    // ok
                 } else {
                     playStatic(file, item)
                 }
-            } catch (_: Exception) {
+            } catch (e: Exception) {
+                Log.e(tag, "playCurrent", e)
                 pos = (pos + 1) % order.size
                 playCurrent(attempt + 1)
+                return
             }
+            val delayMs = (if (seconds > 0) seconds else 8) * 1000L
+            handler.postDelayed({ advance() }, delayMs)
+            handler.post(tick)
+        }
+
+        private fun looksAnimated(file: File): Boolean {
+            val n = file.name.lowercase()
+            return n.endsWith(".gif") || n.endsWith(".webp")
+        }
+
+        @Suppress("DEPRECATION")
+        private fun tryPlayGifMovie(file: File, item: Item): Boolean {
+            if (!file.name.lowercase().endsWith(".gif")) return false
+            val bytes = file.readBytes()
+            val m = Movie.decodeByteArray(bytes, 0, bytes.size) ?: return false
+            if (m.duration() <= 0 || m.width() <= 0) return false
+            movie = m
+            movieStart = SystemClock.uptimeMillis()
+            computeTransform(item, m.width(), m.height())
+            Log.i(tag, "Movie gif ${file.name} ${m.width()}x${m.height()} dur=${m.duration()}")
+            return true
+        }
+
+        private fun tryPlayAnimatedDrawable(file: File, item: Item): Boolean {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false
+            val src = ImageDecoder.createSource(file)
+            val d = ImageDecoder.decodeDrawable(src) { decoder, info, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                val long = maxOf(info.size.width, info.size.height)
+                val target = maxOf(surfaceW, surfaceH).coerceAtLeast(1)
+                if (long > target * 2) {
+                    val scale = long.toFloat() / (target * 2)
+                    decoder.setTargetSize(
+                        (info.size.width / scale).toInt().coerceAtLeast(1),
+                        (info.size.height / scale).toInt().coerceAtLeast(1),
+                    )
+                }
+            }
+            if (d !is AnimatedImageDrawable) {
+                Log.i(tag, "decode not animated: ${d.javaClass.simpleName}")
+                return false
+            }
+            drawable = d
+            computeTransform(item, d.intrinsicWidth.coerceAtLeast(1), d.intrinsicHeight.coerceAtLeast(1))
+            d.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
+            d.start()
+            Log.i(tag, "AnimatedImageDrawable ${file.name} ${d.intrinsicWidth}x${d.intrinsicHeight}")
+            return true
+        }
+
+        private fun playStatic(file: File, item: Item) {
+            val bmp = decodeScaled(file, maxOf(surfaceW, surfaceH))
+                ?: throw IllegalStateException("decode failed")
+            still = bmp
+            computeTransform(item, bmp.width, bmp.height)
+            Log.i(tag, "static ${file.name} ${bmp.width}x${bmp.height}")
         }
 
         private fun computeTransform(item: Item, w: Int, h: Int) {
             imgW = w
             imgH = h
             val cover = maxOf(surfaceW.toFloat() / w, surfaceH.toFloat() / h)
-            drawScale = cover * item.zoom
+            drawScale = cover * item.zoom.coerceAtLeast(0.1f)
             drawLeft = surfaceW / 2f - drawScale * item.fx * w
             drawTop = surfaceH / 2f - drawScale * item.fy * h
         }
 
-        private fun playAnimated(file: File, item: Item) {
-            val src = ImageDecoder.createSource(file)
-            val d = ImageDecoder.decodeDrawable(src) { decoder, info, _ ->
-                // Downscale to roughly the surface to bound memory.
-                val long = maxOf(info.size.width, info.size.height)
-                val target = maxOf(surfaceW, surfaceH)
-                if (long > target && target > 0) {
-                    decoder.setTargetSampleSize(
-                        (long / target).coerceAtLeast(1)
-                    )
-                }
-            }
-            drawable = d
-            computeTransform(item, d.intrinsicWidth, d.intrinsicHeight)
-            if (d is AnimatedImageDrawable) {
-                d.callback = invalidateCb
-                if (seconds > 0) {
-                    d.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
-                } else {
-                    d.repeatCount = (loops - 1).coerceAtLeast(0)
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                        d.registerAnimationCallback(object : Animatable2.AnimationCallback() {
-                            override fun onAnimationEnd(who: Drawable) = advance()
-                        })
-                    }
-                }
-                d.start()
-            }
-            drawOnce()
-            if (seconds > 0) {
-                handler.postDelayed({ advance() }, seconds * 1000L)
-            }
-        }
-
-        private fun playStatic(file: File, item: Item) {
-            val bmp = decodeScaled(file, maxOf(surfaceW, surfaceH))
-                ?: throw IllegalStateException("decode failed")
-            drawable = null
-            computeTransform(item, bmp.width, bmp.height)
-            drawBitmapOnce(bmp)
-            val delay = (if (seconds > 0) seconds else 5) * 1000L
-            handler.postDelayed({ advance() }, delay)
-        }
-
-        private fun drawOnce() {
-            val d = drawable ?: return
+        private fun drawFrame() {
             val holder = surfaceHolder
             var canvas: Canvas? = null
             try {
@@ -237,30 +257,22 @@ class PlaylistWallpaperService : WallpaperService() {
                 canvas.save()
                 canvas.translate(drawLeft, drawTop)
                 canvas.scale(drawScale, drawScale)
-                d.setBounds(0, 0, imgW, imgH)
-                d.draw(canvas)
-                canvas.restore()
-            } catch (_: Exception) {
-            } finally {
-                if (canvas != null) {
-                    try {
-                        holder.unlockCanvasAndPost(canvas)
-                    } catch (_: Exception) {
+                val m = movie
+                val d = drawable
+                val b = still
+                when {
+                    m != null -> {
+                        val dur = m.duration().coerceAtLeast(1)
+                        val t = ((SystemClock.uptimeMillis() - movieStart) % dur).toInt()
+                        m.setTime(t)
+                        m.draw(canvas, 0f, 0f)
                     }
+                    d != null -> {
+                        d.setBounds(0, 0, imgW, imgH)
+                        d.draw(canvas)
+                    }
+                    b != null -> canvas.drawBitmap(b, 0f, 0f, null)
                 }
-            }
-        }
-
-        private fun drawBitmapOnce(bmp: Bitmap) {
-            val holder = surfaceHolder
-            var canvas: Canvas? = null
-            try {
-                canvas = holder.lockCanvas() ?: return
-                canvas.drawColor(Color.BLACK)
-                canvas.save()
-                canvas.translate(drawLeft, drawTop)
-                canvas.scale(drawScale, drawScale)
-                canvas.drawBitmap(bmp, 0f, 0f, null)
                 canvas.restore()
             } catch (_: Exception) {
             } finally {
