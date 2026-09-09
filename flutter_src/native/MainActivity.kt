@@ -1,5 +1,7 @@
 package __PACKAGE__
 
+import android.app.WallpaperManager
+import android.content.ComponentName
 import android.content.Intent
 import android.media.MediaScannerConnection
 import android.net.Uri
@@ -83,6 +85,18 @@ class MainActivity : FlutterActivity() {
                         val interval = call.argument<Int>("intervalMinutes") ?: 60
                         applyRotation(home, lock, shuffle, interval, result)
                     }
+                    "applyLive" -> {
+                        val items = call.argument<List<Map<String, Any?>>>("items")
+                        val seconds = call.argument<Int>("seconds") ?: 30
+                        val loops = call.argument<Int>("loops") ?: 1
+                        val shuffle = call.argument<Boolean>("shuffle") ?: false
+                        if (items == null) {
+                            result.error("ARGS", "items required", null)
+                        } else {
+                            applyLive(items, seconds, loops, shuffle, result)
+                        }
+                    }
+                    "openLiveWallpaperPreview" -> openLiveWallpaperPreview(result)
                     "cancelWallpaperWork" -> {
                         try {
                             WorkManager.getInstance(applicationContext)
@@ -182,6 +196,48 @@ class MainActivity : FlutterActivity() {
             ExistingPeriodicWorkPolicy.UPDATE,
             request,
         )
+    }
+
+    /// Live wallpaper (mode B): copy originals + write the live manifest off the
+    /// main thread. The user still has to confirm in the system preview
+    /// (openLiveWallpaperPreview) — the app cannot set a live wallpaper silently.
+    private fun applyLive(
+        items: List<Map<String, Any?>>,
+        seconds: Int,
+        loops: Int,
+        shuffle: Boolean,
+        result: MethodChannel.Result,
+    ) {
+        Thread {
+            try {
+                val n = WallpaperStore.applyLive(applicationContext, items, seconds, loops, shuffle)
+                if (n == 0) {
+                    runOnUiThread { result.error("EMPTY", "沒有可用的動態圖片", null) }
+                } else {
+                    runOnUiThread { result.success(n) }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { result.error("EXCEPTION", e.message, null) }
+            }
+        }.start()
+    }
+
+    /// Opens the system "choose live wallpaper" preview for our service. This is
+    /// the ACTION_CHANGE_LIVE_WALLPAPER picker (NOT getCropAndSetWallpaperIntent);
+    /// the user must press "設定" there — the app cannot apply it silently.
+    private fun openLiveWallpaperPreview(result: MethodChannel.Result) {
+        try {
+            val intent = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
+                putExtra(
+                    WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
+                    ComponentName(this@MainActivity, PlaylistWallpaperService::class.java),
+                )
+            }
+            startActivity(intent)
+            result.success(true)
+        } catch (e: Exception) {
+            result.error("EXCEPTION", e.message, null)
+        }
     }
 
     private fun renameFolder(oldPath: String, newName: String, result: MethodChannel.Result) {

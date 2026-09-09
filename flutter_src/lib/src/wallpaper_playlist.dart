@@ -87,24 +87,58 @@ class WallpaperItem {
 
 /// Rotation settings shared by both lists.
 class WallpaperSettings {
-  WallpaperSettings({this.intervalMinutes = 60, this.shuffle = false});
+  WallpaperSettings({
+    this.live = false,
+    this.intervalMinutes = 60,
+    this.shuffle = false,
+    this.liveSeconds = 30,
+    this.loopsBeforeNext = 1,
+  });
 
-  /// Minutes between swaps. WorkManager's real floor is ~15 min.
+  /// false = static rotation (WorkManager); true = dynamic Live Wallpaper.
+  bool live;
+
+  /// Static: minutes between swaps. WorkManager's real floor is ~15 min.
   int intervalMinutes;
   bool shuffle;
 
-  WallpaperSettings copyWith({int? intervalMinutes, bool? shuffle}) =>
+  /// Dynamic: seconds each item plays before advancing (0 = use [loopsBeforeNext]
+  /// instead). When > 0 it takes precedence over loops.
+  int liveSeconds;
+
+  /// Dynamic: number of animation loops before advancing (used when
+  /// [liveSeconds] == 0). Static images fall back to a default duration.
+  int loopsBeforeNext;
+
+  WallpaperSettings copyWith({
+    bool? live,
+    int? intervalMinutes,
+    bool? shuffle,
+    int? liveSeconds,
+    int? loopsBeforeNext,
+  }) =>
       WallpaperSettings(
+        live: live ?? this.live,
         intervalMinutes: intervalMinutes ?? this.intervalMinutes,
         shuffle: shuffle ?? this.shuffle,
+        liveSeconds: liveSeconds ?? this.liveSeconds,
+        loopsBeforeNext: loopsBeforeNext ?? this.loopsBeforeNext,
       );
 
-  Map<String, dynamic> toJson() =>
-      {'intervalMinutes': intervalMinutes, 'shuffle': shuffle};
+  Map<String, dynamic> toJson() => {
+        'live': live,
+        'intervalMinutes': intervalMinutes,
+        'shuffle': shuffle,
+        'liveSeconds': liveSeconds,
+        'loopsBeforeNext': loopsBeforeNext,
+      };
 
   static WallpaperSettings fromJson(Map<String, dynamic> j) => WallpaperSettings(
+        live: (j['live'] as bool?) ?? false,
         intervalMinutes: (j['intervalMinutes'] as int?) ?? 60,
         shuffle: (j['shuffle'] as bool?) ?? false,
+        liveSeconds: (j['liveSeconds'] as int?) ?? 30,
+        loopsBeforeNext: (j['loopsBeforeNext'] as int?) ?? 1,
       );
 }
 

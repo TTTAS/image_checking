@@ -75,6 +75,82 @@ class _WallpaperPageState extends State<WallpaperPage> {
   }
 
   Future<void> _apply() async {
+    if (WallpaperPlaylist.settings.value.live) {
+      await _applyLive();
+    } else {
+      await _applyStatic();
+    }
+  }
+
+  static String _extFor(String mime, String path) {
+    final m = mime.toLowerCase();
+    if (m.contains('gif')) return 'gif';
+    if (m.contains('webp')) return 'webp';
+    if (m.contains('png')) return 'png';
+    if (m.contains('jpeg') || m.contains('jpg')) return 'jpg';
+    final dot = path.lastIndexOf('.');
+    if (dot >= 0 && dot < path.length - 1) return path.substring(dot + 1);
+    return 'img';
+  }
+
+  /// Dynamic (Live) apply: plays the HOME list. Copies each original (keeping
+  /// animation) via native, then opens the system live-wallpaper preview for the
+  /// user to confirm. Uses each entry's saved crop transform (no jpg source).
+  Future<void> _applyLive() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final s = WallpaperPlaylist.settings.value;
+    final home = WallpaperPlaylist.homeItems.value;
+    if (home.isEmpty) {
+      messenger.showSnackBar(
+          const SnackBar(content: Text('主畫面清單是空的（動態桌布播主畫面清單）')));
+      return;
+    }
+    messenger.showSnackBar(const SnackBar(content: Text('準備中…')));
+    final items = <Map<String, dynamic>>[];
+    for (final it in home) {
+      try {
+        final asset = await _asset(it.id);
+        if (asset == null) continue;
+        var file = await asset.originFile;
+        file ??= await asset.file;
+        if (file == null) continue;
+        items.add({
+          'srcPath': file.path,
+          'id': it.id,
+          'ext': _extFor(it.mime, file.path),
+          'zoom': it.cropZoom,
+          'focusX': it.cropFocusX,
+          'focusY': it.cropFocusY,
+          'animated': it.animated,
+        });
+      } catch (_) {
+        // skip broken / deleted
+      }
+    }
+    if (items.isEmpty) {
+      messenger.showSnackBar(
+          const SnackBar(content: Text('找不到可用的圖片檔（可能已被刪除）')));
+      return;
+    }
+    try {
+      await NativeWallpaper.applyLive(
+        items: items,
+        liveSeconds: s.liveSeconds,
+        loops: s.loopsBeforeNext,
+        shuffle: s.shuffle,
+      );
+      await NativeWallpaper.openLiveWallpaperPreview();
+      if (!mounted) return;
+      messenger.showSnackBar(const SnackBar(
+        content: Text('已準備動態桌布，請在系統預覽按「設定」套用。'),
+      ));
+    } on PlatformException catch (e) {
+      messenger.showSnackBar(
+          SnackBar(content: Text('套用失敗：${e.message ?? e.code}')));
+    }
+  }
+
+  Future<void> _applyStatic() async {
     final messenger = ScaffoldMessenger.of(context);
     final s = WallpaperPlaylist.settings.value;
     final home = WallpaperPlaylist.homeItems.value;
@@ -110,10 +186,13 @@ class _WallpaperPageState extends State<WallpaperPage> {
 
   Future<void> _stop() async {
     final messenger = ScaffoldMessenger.of(context);
+    final live = WallpaperPlaylist.settings.value.live;
     try {
       await NativeWallpaper.cancelRotation();
-      messenger.showSnackBar(const SnackBar(
-        content: Text('已停止輪播。目前桌布會保留，只是不再自動更換。'),
+      messenger.showSnackBar(SnackBar(
+        content: Text(live
+            ? '已停止靜態輪播排程。動態桌布無法由 App 移除，請到系統「桌布」設定改回別的桌布。'
+            : '已停止輪播。目前桌布會保留，只是不再自動更換。'),
       ));
     } on PlatformException catch (e) {
       messenger.showSnackBar(
@@ -170,8 +249,45 @@ class _WallpaperPageState extends State<WallpaperPage> {
       ),
       body: Column(
         children: [
+          ValueListenableBuilder<WallpaperSettings>(
+            valueListenable: WallpaperPlaylist.settings,
+            builder: (context, s, _) => Column(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 2),
+                  child: SegmentedButton<bool>(
+                    segments: const [
+                      ButtonSegment(
+                        value: false,
+                        label: Text('靜態'),
+                        icon: Icon(Icons.image_outlined),
+                      ),
+                      ButtonSegment(
+                        value: true,
+                        label: Text('動態'),
+                        icon: Icon(Icons.gif_box_outlined),
+                      ),
+                    ],
+                    selected: {s.live},
+                    onSelectionChanged: (sel) => WallpaperPlaylist.updateSettings(
+                        s.copyWith(live: sel.first)),
+                  ),
+                ),
+                if (s.live)
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(12, 0, 12, 4),
+                    child: Text(
+                      '動態：播「主畫面」清單的 GIF／動態 WebP。必須在系統預覽按「設定」才生效；'
+                      '鎖定畫面不保證會動、較耗電；之後要改回請到系統桌布設定（App 無法自行移除動態桌布）。',
+                      style: TextStyle(fontSize: 11.5, color: Colors.deepOrange),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+              ],
+            ),
+          ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+            padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
             child: SegmentedButton<WallpaperTarget>(
               segments: const [
                 ButtonSegment(
@@ -421,21 +537,60 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               child: Text('輪播設定',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
             ),
-            const Text('切換間隔（主畫面與鎖定共用）',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 8,
-              children: [
-                for (final e in _intervals.entries)
-                  ChoiceChip(
-                    label: Text(e.value),
-                    selected: _s.intervalMinutes == e.key,
-                    onSelected: (_) =>
-                        setState(() => _s = _s.copyWith(intervalMinutes: e.key)),
-                  ),
-              ],
-            ),
+            if (!_s.live) ...[
+              const Text('切換間隔（靜態，主畫面與鎖定共用）',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final e in _intervals.entries)
+                    ChoiceChip(
+                      label: Text(e.value),
+                      selected: _s.intervalMinutes == e.key,
+                      onSelected: (_) => setState(
+                          () => _s = _s.copyWith(intervalMinutes: e.key)),
+                    ),
+                ],
+              ),
+            ] else ...[
+              const Text('每張播放秒數（動態；0＝改用圈數）',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final sec in const [0, 5, 15, 30, 60])
+                    ChoiceChip(
+                      label: Text(sec == 0 ? '用圈數' : '$sec 秒'),
+                      selected: _s.liveSeconds == sec,
+                      onSelected: (_) =>
+                          setState(() => _s = _s.copyWith(liveSeconds: sec)),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              const Text('播完幾圈換（動態；秒數為 0 時生效）',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final n in const [1, 2, 3, 5])
+                    ChoiceChip(
+                      label: Text('$n 圈'),
+                      selected: _s.loopsBeforeNext == n,
+                      onSelected: (_) =>
+                          setState(() => _s = _s.copyWith(loopsBeforeNext: n)),
+                    ),
+                ],
+              ),
+              const Padding(
+                padding: EdgeInsets.only(top: 6),
+                child: Text('秒數優先：有設秒數就以秒為準，否則用圈數。',
+                    style: TextStyle(fontSize: 11)),
+              ),
+            ],
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('隨機順序'),

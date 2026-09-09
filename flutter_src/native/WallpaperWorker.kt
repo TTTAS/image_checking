@@ -61,6 +61,55 @@ object WallpaperStore {
         return f.absolutePath
     }
 
+    /// Live wallpaper (mode B): copies the ORIGINAL files (to keep animation)
+    /// into the app's private dir and writes wallpaper_live.json for
+    /// [PlaylistWallpaperService]. [items] entries carry srcPath / id / ext plus
+    /// the normalized crop transform (zoom / focusX / focusY) and animated flag.
+    /// Returns how many were copied.
+    fun applyLive(
+        context: Context,
+        items: List<Map<String, Any?>>,
+        seconds: Int,
+        loops: Int,
+        shuffle: Boolean,
+    ): Int {
+        val dir = File(context.filesDir, "wallpaper_live/home")
+            .apply { if (!exists()) mkdirs() }
+        dir.listFiles()?.forEach { it.delete() }
+
+        val arr = JSONArray()
+        for (it in items) {
+            val src = it["srcPath"] as? String ?: continue
+            val id = it["id"] as? String ?: continue
+            val ext = (it["ext"] as? String).let { e -> if (e.isNullOrEmpty()) "img" else e }
+            val from = File(src)
+            if (!from.exists()) continue
+            val dst = File(dir, "${sanitize(id)}.$ext")
+            try {
+                from.inputStream().use { input ->
+                    dst.outputStream().use { output -> input.copyTo(output) }
+                }
+            } catch (_: Exception) {
+                continue
+            }
+            arr.put(JSONObject().apply {
+                put("path", dst.absolutePath)
+                put("zoom", (it["zoom"] as? Number)?.toDouble() ?: 1.0)
+                put("focusX", (it["focusX"] as? Number)?.toDouble() ?: 0.5)
+                put("focusY", (it["focusY"] as? Number)?.toDouble() ?: 0.5)
+                put("animated", (it["animated"] as? Boolean) ?: false)
+            })
+        }
+        val root = JSONObject().apply {
+            put("items", arr)
+            put("seconds", seconds)
+            put("loops", loops)
+            put("shuffle", shuffle)
+        }
+        File(context.filesDir, "wallpaper_live.json").writeText(root.toString())
+        return arr.length()
+    }
+
     /// Schedules rotation for both lists. [homePaths]/[lockPaths] are ordered
     /// cropped-file paths; either may be empty (that side simply won't rotate).
     /// Sets the first image of each side immediately.

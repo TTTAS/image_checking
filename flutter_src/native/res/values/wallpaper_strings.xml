@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="playlist_wallpaper_label">相簿輪播桌布</string>
+    <string name="playlist_wallpaper_desc">輪播你在相簿選的 GIF／動態 WebP。</string>
+</resources>

@@ -45,6 +45,9 @@ jobs:
           grep -q 'xmlns:tools' "$MANIFEST" || sed -i 's|<manifest |<manifest xmlns:tools="http://schemas.android.com/tools" |' "$MANIFEST"
           sed -i 's|[$]{applicationName}|.PhotoApplication|g' "$MANIFEST"
           grep -q 'WorkManagerInitializer' "$MANIFEST" || perl -0pi -e 's/(<\/application>)/        <provider android:name="androidx.startup.InitializationProvider" android:authorities="\${applicationId}.androidx-startup" android:exported="false" tools:node="merge">\n            <meta-data android:name="androidx.work.WorkManagerInitializer" tools:node="remove" \/>\n        <\/provider>\n    $1/' "$MANIFEST"
+
+          # Register the Live Wallpaper service (mode B).
+          grep -q 'PlaylistWallpaperService' "$MANIFEST" || perl -0pi -e 's/(<\/application>)/        <service android:name=".PlaylistWallpaperService" android:exported="true" android:label="\@string\/playlist_wallpaper_label" android:permission="android.permission.BIND_WALLPAPER">\n            <intent-filter>\n                <action android:name="android.service.wallpaper.WallpaperService" \/>\n            <\/intent-filter>\n            <meta-data android:name="android.service.wallpaper" android:resource="\@xml\/playlist_wallpaper" \/>\n        <\/service>\n    $1/' "$MANIFEST"
           echo "----- AndroidManifest.xml -----"
           cat "$MANIFEST"
 
@@ -63,6 +66,14 @@ jobs:
             echo "injected $name"
           done
           ls -1 "$PKGDIR"
+          # Live-wallpaper resources (xml descriptor + strings). Our values file is
+          # named wallpaper_strings.xml so it merges without clobbering strings.xml.
+          if [ -d flutter_src/native/res ]; then
+            mkdir -p android/app/src/main/res/xml android/app/src/main/res/values
+            cp flutter_src/native/res/xml/*.xml android/app/src/main/res/xml/ 2>/dev/null || true
+            cp flutter_src/native/res/values/*.xml android/app/src/main/res/values/ 2>/dev/null || true
+            echo "copied res:"; ls -1 android/app/src/main/res/xml android/app/src/main/res/values
+          fi
 
       - name: Inject WorkManager dependency + proguard keep rules
         run: |

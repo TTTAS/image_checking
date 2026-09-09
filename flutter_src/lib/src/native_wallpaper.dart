@@ -70,4 +70,29 @@ class NativeWallpaper {
   static Future<void> cancelRotation() async {
     await _channel.invokeMethod<bool>('cancelWallpaperWork');
   }
+
+  /// Live wallpaper (mode B): copies the given ORIGINAL files into the app's
+  /// private dir and writes the live manifest. [items] is an ordered list of
+  /// `{'srcPath','id','ext','zoom','focusX','focusY','animated'}` maps.
+  /// Does NOT set the wallpaper — call [openLiveWallpaperPreview] after.
+  /// Throws [PlatformException] on failure.
+  static Future<void> applyLive({
+    required List<Map<String, dynamic>> items,
+    required int liveSeconds,
+    required int loops,
+    required bool shuffle,
+  }) async {
+    await _channel.invokeMethod<int>('applyLive', {
+      'items': items,
+      'seconds': liveSeconds,
+      'loops': loops,
+      'shuffle': shuffle,
+    });
+  }
+
+  /// Opens the system "choose live wallpaper" preview for our service. The user
+  /// must confirm there (the app cannot set a live wallpaper silently).
+  static Future<void> openLiveWallpaperPreview() async {
+    await _channel.invokeMethod<bool>('openLiveWallpaperPreview');
+  }
 }

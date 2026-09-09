@@ -152,9 +152,28 @@ if ($xml2 -notmatch 'WorkManagerInitializer') {
 "@
   $xml2 = $xml2.Replace('</application>', $prov + '    </application>')
 }
+# 註冊 Live Wallpaper service（動態模式 B）
+if ($xml2 -notmatch 'PlaylistWallpaperService') {
+  $svc = @"
+        <service
+            android:name=".PlaylistWallpaperService"
+            android:exported="true"
+            android:label="@string/playlist_wallpaper_label"
+            android:permission="android.permission.BIND_WALLPAPER">
+            <intent-filter>
+                <action android:name="android.service.wallpaper.WallpaperService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.service.wallpaper"
+                android:resource="@xml/playlist_wallpaper" />
+        </service>
+
+"@
+  $xml2 = $xml2.Replace('</application>', $svc + '    </application>')
+}
 $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 [System.IO.File]::WriteAllText($manifest, $xml2, $utf8NoBom)
-Write-Host '已設定 WorkManager on-demand 初始化。'
+Write-Host '已設定 WorkManager on-demand 初始化與 Live Wallpaper service。'
 
 # 注入原生 Kotlin（MainActivity + 桌布輪播）到產生的 package 目錄
 $genMain = Get-ChildItem (Join-Path $ProjectRoot 'android\app\src\main') -Recurse -Filter MainActivity.kt |
@@ -169,6 +188,13 @@ if ($genMain) {
     $content = (Get-Content $_.FullName -Raw) -replace '__PACKAGE__', $pkg
     [System.IO.File]::WriteAllText((Join-Path $pkgDir $_.Name), $content, $utf8NoBom)
     Write-Host "已注入原生 $($_.Name)"
+  }
+  # Live Wallpaper res（xml descriptor + strings；wallpaper_strings.xml 不覆蓋 strings.xml）
+  $resSrc = Join-Path $SrcDir 'native\res'
+  if (Test-Path $resSrc) {
+    $resDst = Join-Path $ProjectRoot 'android\app\src\main\res'
+    Copy-Item (Join-Path $resSrc '*') $resDst -Recurse -Force
+    Write-Host '已注入 Live Wallpaper 資源（res/xml、res/values）。'
   }
 }
 else {
