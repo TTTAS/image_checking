@@ -3,6 +3,7 @@ import 'package:photo_manager/photo_manager.dart';
 
 import 'collections.dart';
 import 'library.dart';
+import 'move_folder.dart';
 import 'photo_actions.dart';
 import 'selection.dart';
 import 'wallpaper_page.dart';
@@ -72,7 +73,7 @@ class SelectableThumb extends StatelessWidget {
 }
 
 /// The AppBar shown while in multi-select mode: favorite / hide / share /
-/// delete acting on the current selection.
+/// move / delete acting on the current selection.
 /// [reload] is only needed by folder-scoped grids (folder detail) that keep
 /// their own asset list; the home tabs read the shared [PhotoLibrary] and pass
 /// nothing, since hiding flows through [AppCollections] and deletion through
@@ -118,6 +119,31 @@ AppBar selectionAppBar({
       ),
       // Wrapped in a Builder so we get a context under the Scaffold for the
       // SnackBar / navigation without changing this function's signature.
+      Builder(
+        builder: (context) => IconButton(
+          icon: const Icon(Icons.drive_file_move_outline),
+          tooltip: '移到資料夾',
+          onPressed: selection.count == 0
+              ? null
+              : () async {
+                  final result =
+                      await MoveFolder.pickAndMove(context, selected());
+                  if (result == null) return;
+                  selection.clear();
+                  if (reload != null) await reload();
+                  if (!context.mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        result.moved > 0
+                            ? '已把 ${result.moved} 張移到「${result.destName}」'
+                            : '沒有檔案被移動',
+                      ),
+                    ),
+                  );
+                },
+        ),
+      ),
       Builder(
         builder: (context) => PopupMenuButton<String>(
           icon: const Icon(Icons.slideshow_outlined),
