@@ -30,6 +30,9 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
   final GlobalKey _cropKey = GlobalKey();
   final TransformationController _transform = TransformationController();
 
+  // Center the (cover-sized) image on the crop frame once, on first layout.
+  bool _centered = false;
+
   // Which screens to write to. Default = home only, so we never silently
   // overwrite the lock screen too.
   int _flags = WallpaperSettings.flagSystem;
@@ -118,22 +121,54 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                 child: RepaintBoundary(
                   key: _cropKey,
                   child: ClipRect(
-                    child: InteractiveViewer(
-                      transformationController: _transform,
-                      clipBehavior: Clip.hardEdge,
-                      minScale: 1.0,
-                      maxScale: 6.0,
-                      child: SizedBox.expand(
-                        child: Image(
-                          image: provider,
-                          fit: BoxFit.cover,
-                          gaplessPlayback: true,
-                          errorBuilder: (context, error, stack) => const Center(
-                            child: Icon(Icons.broken_image_outlined,
-                                color: Colors.white54, size: 40),
+                    child: LayoutBuilder(
+                      builder: (context, constraints) {
+                        final bw = constraints.maxWidth;
+                        final bh = constraints.maxHeight;
+                        final iw = widget.asset.width.toDouble();
+                        final ih = widget.asset.height.toDouble();
+                        final imgAspect =
+                            (iw > 0 && ih > 0) ? iw / ih : (bw / bh);
+                        final boxAspect = bw / bh;
+                        // "cover": short edge = frame, long edge overflows so it
+                        // can be panned; never smaller than the frame.
+                        double cw, ch;
+                        if (imgAspect > boxAspect) {
+                          ch = bh;
+                          cw = bh * imgAspect;
+                        } else {
+                          cw = bw;
+                          ch = bw / imgAspect;
+                        }
+                        if (!_centered) {
+                          _centered = true;
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            _transform.value = Matrix4.identity()
+                              ..translate(-(cw - bw) / 2, -(ch - bh) / 2);
+                          });
+                        }
+                        return InteractiveViewer(
+                          transformationController: _transform,
+                          constrained: false,
+                          clipBehavior: Clip.hardEdge,
+                          minScale: 1.0,
+                          maxScale: 6.0,
+                          child: SizedBox(
+                            width: cw,
+                            height: ch,
+                            child: Image(
+                              image: provider,
+                              fit: BoxFit.cover,
+                              gaplessPlayback: true,
+                              errorBuilder: (context, error, stack) =>
+                                  const Center(
+                                child: Icon(Icons.broken_image_outlined,
+                                    color: Colors.white54, size: 40),
+                              ),
+                            ),
                           ),
-                        ),
-                      ),
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -145,6 +180,14 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
             child: Text(
               '拖曳移動、雙指縮放；框內就是會被設成桌布的範圍。',
               style: TextStyle(color: Colors.white70, fontSize: 12),
+              textAlign: TextAlign.center,
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: Text(
+              '這裡只設定目前桌布。輪播仍用原圖；要輪播鎖定畫面請到設定→套用範圍。',
+              style: TextStyle(color: Colors.white54, fontSize: 11),
               textAlign: TextAlign.center,
             ),
           ),
