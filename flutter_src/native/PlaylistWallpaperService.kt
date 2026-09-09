@@ -27,18 +27,19 @@ import java.io.File
 /// liveSeconds (precedence) or loopsBeforeNext loops. Bad / missing files are
 /// skipped without crashing.
 class PlaylistWallpaperService : WallpaperService() {
+    // Nested (not inner) so it can live alongside the inner Engine class.
+    private data class Item(
+        val path: String,
+        val zoom: Float,
+        val fx: Float,
+        val fy: Float,
+        val animated: Boolean,
+    )
+
     override fun onCreateEngine(): Engine = PlaylistEngine()
 
     inner class PlaylistEngine : WallpaperService.Engine() {
         private val handler = Handler(Looper.getMainLooper())
-
-        private data class Item(
-            val path: String,
-            val zoom: Float,
-            val fx: Float,
-            val fy: Float,
-            val animated: Boolean,
-        )
 
         private val items = mutableListOf<Item>()
         private var order = mutableListOf<Int>()
