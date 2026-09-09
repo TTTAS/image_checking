@@ -7,12 +7,6 @@ import 'wallpaper_crop_page.dart';
 import 'wallpaper_playlist.dart';
 import 'widgets.dart';
 
-/// Manages the two wallpaper playlists (home / lock): reorder, remove, crop each
-/// entry, tweak the shared interval / shuffle, and apply or stop the rotation.
-///
-/// Each side is cropped and rotated independently: the home list writes
-/// FLAG_SYSTEM, the lock list writes FLAG_LOCK. Apply uses each entry's cropped
-/// file (an un-cropped entry is center-cropped once at apply time and stored).
 class WallpaperPage extends StatefulWidget {
   const WallpaperPage({super.key, this.initialTarget = WallpaperTarget.home});
 
@@ -48,9 +42,6 @@ class _WallpaperPageState extends State<WallpaperPage> {
     ));
   }
 
-  /// Resolves a list to its cropped-file paths. Entries without a crop yet are
-  /// center-cropped once (native) and the resulting file is stored, so rotation
-  /// always uses a real cropped file — never an on-the-fly crop of the original.
   Future<List<String>> _resolvePaths(
       List<WallpaperItem> items, WallpaperTarget t) async {
     final paths = <String>[];
@@ -67,18 +58,49 @@ class _WallpaperPageState extends State<WallpaperPage> {
             await NativeWallpaper.centerCropSave(file.path, t.key, it.id);
         await WallpaperPlaylist.setCropped(t, it.id, path);
         paths.add(path);
-      } catch (_) {
-        // skip broken / deleted
-      }
+      } catch (_) {}
     }
     return paths;
   }
 
+  bool _looksAnimated(WallpaperItem it) {
+    final m = it.mime.toLowerCase();
+    return it.animated || m.contains('gif') || m.contains('webp');
+  }
+
   Future<void> _apply() async {
-    if (WallpaperPlaylist.settings.value.live) {
+    final home = WallpaperPlaylist.homeItems.value;
+    final lock = WallpaperPlaylist.lockItems.value;
+    if (home.isEmpty && lock.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('兩個清單都是空的，先加入圖片')));
+      return;
+    }
+    if (home.any(_looksAnimated)) {
       await _applyLive();
+      if (lock.isNotEmpty) await _applyLockOnly();
     } else {
       await _applyStatic();
+    }
+  }
+
+  Future<void> _applyLockOnly() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final s = WallpaperPlaylist.settings.value;
+    final lock = WallpaperPlaylist.lockItems.value;
+    if (lock.isEmpty) return;
+    try {
+      final lockPaths = await _resolvePaths(lock, WallpaperTarget.lock);
+      if (lockPaths.isEmpty) return;
+      await NativeWallpaper.applyRotation(
+        homePaths: const [],
+        lockPaths: lockPaths,
+        intervalMinutes: s.intervalMinutes,
+        shuffle: s.shuffle,
+      );
+    } on PlatformException catch (e) {
+      messenger.showSnackBar(
+          SnackBar(content: Text('鎖定輪播失敗：${e.message ?? e.code}')));
     }
   }
 
@@ -93,16 +115,13 @@ class _WallpaperPageState extends State<WallpaperPage> {
     return 'img';
   }
 
-  /// Dynamic (Live) apply: plays the HOME list. Copies each original (keeping
-  /// animation) via native, then opens the system live-wallpaper preview for the
-  /// user to confirm. Uses each entry's saved crop transform (no jpg source).
   Future<void> _applyLive() async {
     final messenger = ScaffoldMessenger.of(context);
     final s = WallpaperPlaylist.settings.value;
     final home = WallpaperPlaylist.homeItems.value;
     if (home.isEmpty) {
       messenger.showSnackBar(
-          const SnackBar(content: Text('主畫面清單是空的（動態桌布播主畫面清單）')));
+          const SnackBar(content: Text('主畫面清單是空的')));
       return;
     }
     messenger.showSnackBar(const SnackBar(content: Text('準備中…')));
@@ -121,28 +140,27 @@ class _WallpaperPageState extends State<WallpaperPage> {
           'zoom': it.cropZoom,
           'focusX': it.cropFocusX,
           'focusY': it.cropFocusY,
-          'animated': it.animated,
+          'animated': _looksAnimated(it),
         });
-      } catch (_) {
-        // skip broken / deleted
-      }
+      } catch (_) {}
     }
     if (items.isEmpty) {
       messenger.showSnackBar(
-          const SnackBar(content: Text('找不到可用的圖片檔（可能已被刪除）')));
+          const SnackBar(content: Text('找不到可用的圖片檔')));
       return;
     }
     try {
+      final secs = s.liveSeconds <= 0 ? 30 : s.liveSeconds;
       await NativeWallpaper.applyLive(
         items: items,
-        liveSeconds: s.liveSeconds,
+        liveSeconds: secs,
         loops: s.loopsBeforeNext,
         shuffle: s.shuffle,
       );
       await NativeWallpaper.openLiveWallpaperPreview();
       if (!mounted) return;
-      messenger.showSnackBar(const SnackBar(
-        content: Text('已準備動態桌布，請在系統預覽按「設定」套用。'),
+      messenger.showSnackBar(SnackBar(
+        content: Text('請在系統預覽按「設定」。設好後主畫面每 $secs 秒換下一張。'),
       ));
     } on PlatformException catch (e) {
       messenger.showSnackBar(
@@ -164,7 +182,7 @@ class _WallpaperPageState extends State<WallpaperPage> {
     final lockPaths = await _resolvePaths(lock, WallpaperTarget.lock);
     if (homePaths.isEmpty && lockPaths.isEmpty) {
       messenger.showSnackBar(
-          const SnackBar(content: Text('找不到可用的圖片檔（可能已被刪除）')));
+          const SnackBar(content: Text('找不到可用的圖片檔')));
       return;
     }
     try {
@@ -186,13 +204,11 @@ class _WallpaperPageState extends State<WallpaperPage> {
 
   Future<void> _stop() async {
     final messenger = ScaffoldMessenger.of(context);
-    final live = WallpaperPlaylist.settings.value.live;
     try {
       await NativeWallpaper.cancelRotation();
-      messenger.showSnackBar(SnackBar(
-        content: Text(live
-            ? '已停止靜態輪播排程。動態桌布無法由 App 移除，請到系統「桌布」設定改回別的桌布。'
-            : '已停止輪播。目前桌布會保留，只是不再自動更換。'),
+      messenger.showSnackBar(const SnackBar(
+        content: Text(
+            '已停止靜態輪播排程。若主畫面是動態桌布，請到系統「桌布」改回別張。'),
       ));
     } on PlatformException catch (e) {
       messenger.showSnackBar(
@@ -249,41 +265,13 @@ class _WallpaperPageState extends State<WallpaperPage> {
       ),
       body: Column(
         children: [
-          ValueListenableBuilder<WallpaperSettings>(
-            valueListenable: WallpaperPlaylist.settings,
-            builder: (context, s, _) => Column(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 12, 12, 2),
-                  child: SegmentedButton<bool>(
-                    segments: const [
-                      ButtonSegment(
-                        value: false,
-                        label: Text('靜態'),
-                        icon: Icon(Icons.image_outlined),
-                      ),
-                      ButtonSegment(
-                        value: true,
-                        label: Text('動態'),
-                        icon: Icon(Icons.gif_box_outlined),
-                      ),
-                    ],
-                    selected: {s.live},
-                    onSelectionChanged: (sel) => WallpaperPlaylist.updateSettings(
-                        s.copyWith(live: sel.first)),
-                  ),
-                ),
-                if (s.live)
-                  const Padding(
-                    padding: EdgeInsets.fromLTRB(12, 0, 12, 4),
-                    child: Text(
-                      '動態：播「主畫面」清單的 GIF／動態 WebP。必須在系統預覽按「設定」才生效；'
-                      '鎖定畫面不保證會動、較耗電；之後要改回請到系統桌布設定（App 無法自行移除動態桌布）。',
-                      style: TextStyle(fontSize: 11.5, color: Colors.deepOrange),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-              ],
+          const Padding(
+            padding: EdgeInsets.fromLTRB(12, 10, 12, 0),
+            child: Text(
+              '主畫面清單若有 GIF／動態 WebP，套用時會開系統「動態桌布」預覽（必須按設定才會動）。'
+              '鎖定清單維持靜態輪播，鎖屏不保證播動畫。',
+              style: TextStyle(fontSize: 12),
+              textAlign: TextAlign.center,
             ),
           ),
           Padding(
@@ -305,16 +293,9 @@ class _WallpaperPageState extends State<WallpaperPage> {
               onSelectionChanged: (sel) => setState(() => _tab = sel.first),
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.fromLTRB(12, 0, 12, 6),
-            child: Text(
-              '主畫面／鎖定各自獨立：分別裁切、分別輪播。每張都用你裁好的畫面。',
-              style: TextStyle(fontSize: 12),
-              textAlign: TextAlign.center,
-            ),
-          ),
           Expanded(child: _list(_tab)),
           const Divider(height: 1),
+          const _IntervalBar(),
           _ActionBar(onApply: _apply, onStop: _stop),
         ],
       ),
@@ -381,7 +362,6 @@ class _EmptyState extends StatelessWidget {
   }
 }
 
-/// One reorderable row: thumbnail + filename + crop-state + crop / delete / drag.
 class _PlaylistTile extends StatelessWidget {
   const _PlaylistTile({
     super.key,
@@ -466,7 +446,51 @@ class _PlaylistTile extends StatelessWidget {
   }
 }
 
-/// Bottom apply / stop buttons.
+class _IntervalBar extends StatelessWidget {
+  const _IntervalBar();
+
+  static const _secs = [10, 15, 30, 60, 120];
+
+  static String _label(int sec) =>
+      sec < 60 ? '$sec 秒' : '${sec ~/ 60} 分鐘';
+
+  @override
+  Widget build(BuildContext context) {
+    return ValueListenableBuilder<WallpaperSettings>(
+      valueListenable: WallpaperPlaylist.settings,
+      builder: (context, s, _) {
+        final current = s.liveSeconds <= 0 ? 30 : s.liveSeconds;
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                'GIF 每張播多久換下一張（現在 ${_label(current)}；改完要再按套用）',
+                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                children: [
+                  for (final sec in _secs)
+                    ChoiceChip(
+                      label: Text(_label(sec)),
+                      selected: current == sec,
+                      onSelected: (_) => WallpaperPlaylist.updateSettings(
+                        s.copyWith(liveSeconds: sec),
+                      ),
+                    ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _ActionBar extends StatelessWidget {
   const _ActionBar({required this.onApply, required this.onStop});
   final VoidCallback onApply;
@@ -499,7 +523,6 @@ class _ActionBar extends StatelessWidget {
   }
 }
 
-/// Shared settings: interval + shuffle only (scope is now decided by the list).
 class _SettingsSheet extends StatefulWidget {
   const _SettingsSheet();
 
@@ -537,60 +560,21 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               child: Text('輪播設定',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
             ),
-            if (!_s.live) ...[
-              const Text('切換間隔（靜態，主畫面與鎖定共用）',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                children: [
-                  for (final e in _intervals.entries)
-                    ChoiceChip(
-                      label: Text(e.value),
-                      selected: _s.intervalMinutes == e.key,
-                      onSelected: (_) => setState(
-                          () => _s = _s.copyWith(intervalMinutes: e.key)),
-                    ),
-                ],
-              ),
-            ] else ...[
-              const Text('每張播放秒數（動態；0＝改用圈數）',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                children: [
-                  for (final sec in const [0, 5, 15, 30, 60])
-                    ChoiceChip(
-                      label: Text(sec == 0 ? '用圈數' : '$sec 秒'),
-                      selected: _s.liveSeconds == sec,
-                      onSelected: (_) =>
-                          setState(() => _s = _s.copyWith(liveSeconds: sec)),
-                    ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              const Text('播完幾圈換（動態；秒數為 0 時生效）',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                children: [
-                  for (final n in const [1, 2, 3, 5])
-                    ChoiceChip(
-                      label: Text('$n 圈'),
-                      selected: _s.loopsBeforeNext == n,
-                      onSelected: (_) =>
-                          setState(() => _s = _s.copyWith(loopsBeforeNext: n)),
-                    ),
-                ],
-              ),
-              const Padding(
-                padding: EdgeInsets.only(top: 6),
-                child: Text('秒數優先：有設秒數就以秒為準，否則用圈數。',
-                    style: TextStyle(fontSize: 11)),
-              ),
-            ],
+            const Text('靜態切換間隔（鎖定，以及主畫面沒有 GIF 時）',
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final e in _intervals.entries)
+                  ChoiceChip(
+                    label: Text(e.value),
+                    selected: _s.intervalMinutes == e.key,
+                    onSelected: (_) => setState(
+                        () => _s = _s.copyWith(intervalMinutes: e.key)),
+                  ),
+              ],
+            ),
             SwitchListTile(
               contentPadding: EdgeInsets.zero,
               title: const Text('隨機順序'),
