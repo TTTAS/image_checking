@@ -52,13 +52,36 @@ class MainActivity : FlutterActivity() {
                             setWallpaperBytes(bytes, flags, result)
                         }
                     }
-                    "applyStaticWallpaper" -> {
-                        val items = call.argument<List<Map<String, Any?>>>("items")
-                        val flags = call.argument<Int>("flags") ?: 1
-                        val fit = call.argument<String>("fit") ?: "crop"
+                    "saveCrop" -> {
+                        val bytes = call.argument<ByteArray>("bytes")
+                        val side = call.argument<String>("side") ?: "home"
+                        val id = call.argument<String>("id")
+                        if (bytes == null || id == null) {
+                            result.error("ARGS", "bytes / id required", null)
+                        } else {
+                            runOffThread(result) {
+                                WallpaperStore.saveCropBytes(applicationContext, bytes, side, id)
+                            }
+                        }
+                    }
+                    "centerCropSave" -> {
+                        val src = call.argument<String>("srcPath")
+                        val side = call.argument<String>("side") ?: "home"
+                        val id = call.argument<String>("id")
+                        if (src == null || id == null) {
+                            result.error("ARGS", "srcPath / id required", null)
+                        } else {
+                            runOffThread(result) {
+                                WallpaperStore.centerCropSave(applicationContext, src, side, id)
+                            }
+                        }
+                    }
+                    "applyRotation" -> {
+                        val home = call.argument<List<String>>("home") ?: emptyList()
+                        val lock = call.argument<List<String>>("lock") ?: emptyList()
                         val shuffle = call.argument<Boolean>("shuffle") ?: false
                         val interval = call.argument<Int>("intervalMinutes") ?: 60
-                        applyStaticWallpaper(items, flags, fit, shuffle, interval, result)
+                        applyRotation(home, lock, shuffle, interval, result)
                     }
                     "cancelWallpaperWork" -> {
                         try {
@@ -108,32 +131,37 @@ class MainActivity : FlutterActivity() {
         }.start()
     }
 
-    /// Mode A (static rotation): copy the chosen files into the app's private
-    /// dir, set the first one now, and schedule a periodic job to advance. Runs
-    /// off the main thread because copying + decoding can take a moment.
-    private fun applyStaticWallpaper(
-        items: List<Map<String, Any?>>?,
-        flags: Int,
-        fit: String,
+    /// Runs [work] on a background thread and returns its String result to Dart.
+    private fun runOffThread(result: MethodChannel.Result, work: () -> String) {
+        Thread {
+            try {
+                val out = work()
+                runOnUiThread { result.success(out) }
+            } catch (e: Exception) {
+                runOnUiThread { result.error("EXCEPTION", e.message, null) }
+            }
+        }.start()
+    }
+
+    /// Static rotation for two lists (home / lock). Writes the manifest, sets the
+    /// first of each side now, and schedules the periodic advance. The cropped
+    /// files already live in the app's private dir, so nothing is copied here.
+    private fun applyRotation(
+        home: List<String>,
+        lock: List<String>,
         shuffle: Boolean,
         intervalMinutes: Int,
         result: MethodChannel.Result,
     ) {
-        val sources = items?.mapNotNull { it["path"] as? String } ?: emptyList()
-        if (sources.isEmpty()) {
-            result.error("EMPTY", "沒有可用的圖片檔", null)
+        if (home.isEmpty() && lock.isEmpty()) {
+            result.error("EMPTY", "沒有可輪播的圖片", null)
             return
         }
         Thread {
             try {
-                val count =
-                    WallpaperStore.setup(applicationContext, sources, flags, fit, shuffle)
-                if (count == 0) {
-                    runOnUiThread { result.error("COPY_FAILED", "無法複製任何圖片", null) }
-                    return@Thread
-                }
+                WallpaperStore.applyRotation(applicationContext, home, lock, shuffle)
                 scheduleRotation(intervalMinutes)
-                runOnUiThread { result.success(count) }
+                runOnUiThread { result.success(true) }
             } catch (e: Exception) {
                 runOnUiThread { result.error("EXCEPTION", e.message, null) }
             }

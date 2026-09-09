@@ -106,18 +106,24 @@ class _ViewerPageState extends State<ViewerPage> {
     );
   }
 
-  Future<void> _addToPlaylist() async {
+  Future<void> _addToPlaylist(List<WallpaperTarget> targets) async {
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
-    final added = await WallpaperPlaylist.add(_current);
+    var any = false;
+    for (final t in targets) {
+      if (await WallpaperPlaylist.add(_current, t)) any = true;
+    }
     if (!mounted) return;
+    final label = targets.length >= 2 ? '主畫面與鎖定' : targets.first.label;
     messenger.showSnackBar(SnackBar(
-      content: Text(added ? '已加入輪播清單' : '無法加入（不支援的格式或已在清單中）'),
-      action: added
+      content: Text(any ? '已加入$label輪播' : '無法加入（不支援的格式或已在清單中）'),
+      action: any
           ? SnackBarAction(
               label: '檢視',
               onPressed: () => navigator.push(
-                MaterialPageRoute<void>(builder: (_) => const WallpaperPage()),
+                MaterialPageRoute<void>(
+                    builder: (_) =>
+                        WallpaperPage(initialTarget: targets.first)),
               ),
             )
           : null,
@@ -173,16 +179,29 @@ class _ViewerPageState extends State<ViewerPage> {
               icon: const Icon(Icons.wallpaper),
               tooltip: '桌布',
               onSelected: (v) {
-                if (v == 'single') {
-                  Navigator.of(context).push(MaterialPageRoute<void>(
-                    builder: (_) => WallpaperCropPage(asset: _current),
-                  ));
+                switch (v) {
+                  case 'single':
+                    Navigator.of(context).push(MaterialPageRoute<void>(
+                      builder: (_) => WallpaperCropPage(asset: _current),
+                    ));
+                    break;
+                  case 'home':
+                    _addToPlaylist([WallpaperTarget.home]);
+                    break;
+                  case 'lock':
+                    _addToPlaylist([WallpaperTarget.lock]);
+                    break;
+                  case 'both':
+                    _addToPlaylist(
+                        [WallpaperTarget.home, WallpaperTarget.lock]);
+                    break;
                 }
-                if (v == 'playlist') _addToPlaylist();
               },
               itemBuilder: (context) => const [
                 PopupMenuItem(value: 'single', child: Text('設為桌布（單張）')),
-                PopupMenuItem(value: 'playlist', child: Text('加入輪播清單')),
+                PopupMenuItem(value: 'home', child: Text('加入主畫面輪播')),
+                PopupMenuItem(value: 'lock', child: Text('加入鎖定輪播')),
+                PopupMenuItem(value: 'both', child: Text('兩邊都加入輪播')),
               ],
             ),
           IconButton(

@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
@@ -12,15 +13,20 @@ import 'wallpaper_playlist.dart';
 /// In-app wallpaper crop + preview (no system cropper, no external app).
 ///
 /// The image sits inside a crop frame whose aspect ratio matches the screen; the
-/// user pans / pinch-zooms, and whatever shows inside the frame is exactly what
-/// gets set (WYSIWYG). On confirm we capture the frame to a screen-sized bitmap
-/// and hand the bytes to the native side, which only decodes + setBitmap for the
-/// chosen screens (home / lock / both). The wallpaper is never touched until the
-/// user taps 設為桌布.
+/// user pans / pinch-zooms and whatever shows inside the frame is exactly what
+/// gets used (WYSIWYG). On confirm we capture the frame to a screen-sized bitmap.
+///
+/// Two modes:
+///  * playlist ([target] != null): "儲存裁切" saves the crop file into that list
+///    (no wallpaper change); "設為桌布" saves it AND sets that side now
+///    (home=FLAG_SYSTEM, lock=FLAG_LOCK).
+///  * single ([target] == null, from the viewer): a one-off set with a
+///    home/lock/both chooser; does not touch any playlist.
 class WallpaperCropPage extends StatefulWidget {
-  const WallpaperCropPage({super.key, required this.asset});
+  const WallpaperCropPage({super.key, required this.asset, this.target});
 
   final AssetEntity asset;
+  final WallpaperTarget? target;
 
   @override
   State<WallpaperCropPage> createState() => _WallpaperCropPageState();
@@ -30,13 +36,13 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
   final GlobalKey _cropKey = GlobalKey();
   final TransformationController _transform = TransformationController();
 
-  // Center the (cover-sized) image on the crop frame once, on first layout.
   bool _centered = false;
-
-  // Which screens to write to. Default = home only, so we never silently
-  // overwrite the lock screen too.
-  int _flags = WallpaperSettings.flagSystem;
   bool _busy = false;
+
+  // Single-mode target screens (home only by default). Unused in playlist mode.
+  int _flags = kFlagSystem;
+
+  bool get _isPlaylist => widget.target != null;
 
   bool get _animated {
     final m = (widget.asset.mimeType ?? '').toLowerCase();
@@ -53,44 +59,92 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
     super.dispose();
   }
 
-  Future<void> _apply() async {
+  Future<Uint8List> _captureBytes() async {
+    final mq = MediaQuery.of(context);
+    final boundary =
+        _cropKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
+    final screenWpx = mq.size.width * mq.devicePixelRatio;
+    final pr = (screenWpx / boundary.size.width).clamp(1.0, 4.0);
+    final image = await boundary.toImage(pixelRatio: pr);
+    final bd = await image.toByteData(format: ui.ImageByteFormat.png);
+    image.dispose();
+    if (bd == null) throw StateError('擷取影像失敗');
+    return bd.buffer.asUint8List();
+  }
+
+  void _fail(Object e) {
+    if (!mounted) return;
+    setState(() => _busy = false);
+    final m = e is PlatformException ? (e.message ?? e.code) : '$e';
+    ScaffoldMessenger.of(context)
+        .showSnackBar(SnackBar(content: Text('操作失敗：$m')));
+  }
+
+  // Playlist mode: save the crop file only (no wallpaper change).
+  Future<void> _saveCropOnly() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final t = widget.target!;
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    try {
+      final bytes = await _captureBytes();
+      final path = await NativeWallpaper.saveCrop(bytes, t.key, widget.asset.id);
+      await WallpaperPlaylist.setCropped(t, widget.asset.id, path);
+      if (!mounted) return;
+      messenger.showSnackBar(
+          const SnackBar(content: Text('已儲存裁切（不會立刻換桌布，下次輪播會用它）')));
+      navigator.pop();
+    } catch (e) {
+      _fail(e);
+    }
+  }
+
+  // Playlist mode: save the crop AND set that side now.
+  Future<void> _setNowPlaylist() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final t = widget.target!;
+    final messenger = ScaffoldMessenger.of(context);
+    final navigator = Navigator.of(context);
+    try {
+      final bytes = await _captureBytes();
+      final path = await NativeWallpaper.saveCrop(bytes, t.key, widget.asset.id);
+      await WallpaperPlaylist.setCropped(t, widget.asset.id, path);
+      final honored = await NativeWallpaper.setWallpaperBytes(bytes, t.flag);
+      if (!mounted) return;
+      var msg = '已設為${t.label}的桌布，並存為裁切';
+      if (!honored && t.flag != kFlagSystem) {
+        msg += '（此裝置較舊，無法分開，已套用單一桌布）';
+      }
+      messenger.showSnackBar(SnackBar(content: Text(msg)));
+      navigator.pop();
+    } catch (e) {
+      _fail(e);
+    }
+  }
+
+  // Single mode (from viewer): one-off set, no playlist write.
+  Future<void> _setSingle() async {
     if (_busy) return;
     setState(() => _busy = true);
     final messenger = ScaffoldMessenger.of(context);
     final navigator = Navigator.of(context);
-    final mq = MediaQuery.of(context);
     try {
-      final boundary =
-          _cropKey.currentContext!.findRenderObject() as RenderRepaintBoundary;
-      // Capture at ~screen resolution: output width ≈ real screen pixels.
-      final screenWpx = mq.size.width * mq.devicePixelRatio;
-      final pr = (screenWpx / boundary.size.width).clamp(1.0, 4.0);
-      final image = await boundary.toImage(pixelRatio: pr);
-      final bd = await image.toByteData(format: ui.ImageByteFormat.png);
-      image.dispose();
-      if (bd == null) throw StateError('擷取影像失敗');
-      final bytes = bd.buffer.asUint8List();
-
+      final bytes = await _captureBytes();
       final honored = await NativeWallpaper.setWallpaperBytes(bytes, _flags);
       if (!mounted) return;
-      final where = _flags == (WallpaperSettings.flagSystem | WallpaperSettings.flagLock)
+      final where = _flags == (kFlagSystem | kFlagLock)
           ? '主畫面與鎖定畫面'
-          : (_flags == WallpaperSettings.flagLock ? '鎖定畫面' : '主畫面');
+          : (_flags == kFlagLock ? '鎖定畫面' : '主畫面');
       var msg = '已設為$where的桌布';
-      if (!honored && _flags != WallpaperSettings.flagSystem) {
-        msg += '（此裝置較舊，無法分開主畫面／鎖定，已套用單一桌布）';
+      if (!honored && _flags != kFlagSystem) {
+        msg += '（此裝置較舊，無法分開，已套用單一桌布）';
       }
       messenger.showSnackBar(SnackBar(content: Text(msg)));
       navigator.pop();
-    } on PlatformException catch (e) {
-      if (!mounted) return;
-      setState(() => _busy = false);
-      messenger.showSnackBar(
-          SnackBar(content: Text('設定失敗：${e.message ?? e.code}')));
     } catch (e) {
-      if (!mounted) return;
-      setState(() => _busy = false);
-      messenger.showSnackBar(SnackBar(content: Text('設定失敗：$e')));
+      _fail(e);
     }
   }
 
@@ -99,7 +153,6 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
     final mq = MediaQuery.of(context);
     final cropAspect = mq.size.width / mq.size.height;
     final screenWpx = (mq.size.width * mq.devicePixelRatio).round();
-    // Cap decode to the screen width so huge photos don't blow up memory.
     final provider = ResizeImage(
       AssetEntityImageProvider(widget.asset, isOriginal: true),
       width: screenWpx,
@@ -110,7 +163,10 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        title: const Text('裁切桌布', style: TextStyle(fontSize: 16)),
+        title: Text(
+          _isPlaylist ? '裁切（${widget.target!.label}）' : '裁切桌布',
+          style: const TextStyle(fontSize: 16),
+        ),
       ),
       body: Column(
         children: [
@@ -130,8 +186,6 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                         final imgAspect =
                             (iw > 0 && ih > 0) ? iw / ih : (bw / bh);
                         final boxAspect = bw / bh;
-                        // "cover": short edge = frame, long edge overflows so it
-                        // can be panned; never smaller than the frame.
                         double cw, ch;
                         if (imgAspect > boxAspect) {
                           ch = bh;
@@ -183,54 +237,22 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
               textAlign: TextAlign.center,
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              '這裡只設定目前桌布。輪播仍用原圖；要輪播鎖定畫面請到設定→套用範圍。',
-              style: TextStyle(color: Colors.white54, fontSize: 11),
-              textAlign: TextAlign.center,
-            ),
-          ),
           if (_animated)
             const Padding(
-              padding: EdgeInsets.only(bottom: 6),
+              padding: EdgeInsets.only(bottom: 4),
               child: Text(
                 '動態圖片只會擷取單一靜態畫面（會動要等 M3）。',
                 style: TextStyle(color: Colors.white54, fontSize: 11),
                 textAlign: TextAlign.center,
               ),
             ),
-          _BottomBar(
-            flags: _flags,
-            busy: _busy,
-            onFlags: (f) => setState(() => _flags = f),
-            onApply: _apply,
-            onCancel: () => Navigator.of(context).pop(),
-          ),
+          _isPlaylist ? _playlistBar() : _singleBar(),
         ],
       ),
     );
   }
-}
 
-class _BottomBar extends StatelessWidget {
-  const _BottomBar({
-    required this.flags,
-    required this.busy,
-    required this.onFlags,
-    required this.onApply,
-    required this.onCancel,
-  });
-
-  final int flags;
-  final bool busy;
-  final ValueChanged<int> onFlags;
-  final VoidCallback onApply;
-  final VoidCallback onCancel;
-
-  @override
-  Widget build(BuildContext context) {
-    const both = WallpaperSettings.flagSystem | WallpaperSettings.flagLock;
+  Widget _playlistBar() {
     return Material(
       color: Colors.black,
       child: SafeArea(
@@ -241,42 +263,90 @@ class _BottomBar extends StatelessWidget {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                '主畫面＝解鎖後的桌面；鎖定＝沒解鎖時的畫面；兩者＝同一張寫入兩邊。',
+                '「儲存裁切」只更新這張的裁切、不會立刻換桌布；「設為桌布」會存並立刻套用這一邊。',
                 style: TextStyle(color: Colors.white60, fontSize: 11),
                 textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 8),
-              SegmentedButton<int>(
-                segments: const [
-                  ButtonSegment(
-                      value: WallpaperSettings.flagSystem, label: Text('主畫面')),
-                  ButtonSegment(
-                      value: WallpaperSettings.flagLock, label: Text('鎖定')),
-                  ButtonSegment(value: both, label: Text('兩者')),
-                ],
-                selected: {flags},
-                onSelectionChanged:
-                    busy ? null : (sel) => onFlags(sel.first),
               ),
               const SizedBox(height: 10),
               Row(
                 children: [
                   Expanded(
+                    child: OutlinedButton(
+                      onPressed: _busy ? null : _saveCropOnly,
+                      style: OutlinedButton.styleFrom(
+                          foregroundColor: Colors.white),
+                      child: const Text('儲存裁切'),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
                     child: FilledButton.icon(
-                      icon: busy
+                      icon: _busy
                           ? const SizedBox(
                               width: 16,
                               height: 16,
                               child: CircularProgressIndicator(strokeWidth: 2),
                             )
                           : const Icon(Icons.wallpaper),
-                      label: Text(busy ? '設定中…' : '設為桌布'),
-                      onPressed: busy ? null : onApply,
+                      label: Text(_busy ? '處理中…' : '設為桌布'),
+                      onPressed: _busy ? null : _setNowPlaylist,
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _singleBar() {
+    const both = kFlagSystem | kFlagLock;
+    return Material(
+      color: Colors.black,
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Text(
+                '主畫面＝解鎖後的桌面；鎖定＝沒解鎖時的畫面；兩者＝同一張寫入兩邊。此處只設定一次，不影響輪播清單。',
+                style: TextStyle(color: Colors.white60, fontSize: 11),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 8),
+              SegmentedButton<int>(
+                segments: const [
+                  ButtonSegment(value: kFlagSystem, label: Text('主畫面')),
+                  ButtonSegment(value: kFlagLock, label: Text('鎖定')),
+                  ButtonSegment(value: both, label: Text('兩者')),
+                ],
+                selected: {_flags},
+                onSelectionChanged:
+                    _busy ? null : (sel) => setState(() => _flags = sel.first),
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      icon: _busy
+                          ? const SizedBox(
+                              width: 16,
+                              height: 16,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.wallpaper),
+                      label: Text(_busy ? '設定中…' : '設為桌布'),
+                      onPressed: _busy ? null : _setSingle,
                     ),
                   ),
                   const SizedBox(width: 8),
                   OutlinedButton(
-                    onPressed: busy ? null : onCancel,
+                    onPressed: _busy ? null : () => Navigator.of(context).pop(),
                     style: OutlinedButton.styleFrom(
                         foregroundColor: Colors.white),
                     child: const Text('取消'),

@@ -4,19 +4,22 @@ import 'package:flutter/foundation.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// App-local "wallpaper playlist": the ordered set of photos / GIFs / WebPs the
-/// user wants to rotate as their wallpaper, plus the rotation settings.
-///
-/// This is milestone M1 (skeleton only): it stores and manages the list and the
-/// settings so the UI works end to end. It does NOT yet copy files or actually
-/// change the wallpaper — that arrives in M2 (static rotation) and M3 (live
-/// wallpaper). See the implementation brief for the full plan.
-///
-/// Follows the same shape as [AppCollections]: a tiny static holder backed by
-/// [SharedPreferences], exposing [ValueNotifier]s the UI listens to.
+/// WallpaperManager screen flags (match Android's values so native can pass them
+/// straight through).
+const int kFlagSystem = 1; // home screen
+const int kFlagLock = 2; // lock screen
 
-/// The kinds of images we accept into the playlist. Videos are deliberately
-/// excluded in this version.
+/// Which screen a playlist / crop belongs to. Home and lock are independent
+/// lists, each cropped and rotated separately.
+enum WallpaperTarget { home, lock }
+
+extension WallpaperTargetX on WallpaperTarget {
+  String get key => this == WallpaperTarget.home ? 'home' : 'lock';
+  int get flag => this == WallpaperTarget.home ? kFlagSystem : kFlagLock;
+  String get label => this == WallpaperTarget.home ? '主畫面' : '鎖定';
+}
+
+/// Image types accepted into the playlist. Videos are excluded.
 const Set<String> kWallpaperMimes = {
   'image/jpeg',
   'image/png',
@@ -24,7 +27,7 @@ const Set<String> kWallpaperMimes = {
   'image/gif',
 };
 
-/// One entry in the wallpaper playlist.
+/// One entry in a wallpaper playlist.
 class WallpaperItem {
   WallpaperItem({
     required this.id,
@@ -33,23 +36,18 @@ class WallpaperItem {
     this.filePath = '',
   });
 
-  /// The source photo's asset id (from photo_manager / MediaStore).
+  /// Source photo's asset id.
   final String id;
 
-  /// Path of the copy inside the app's private files dir. Empty until M2 fills
-  /// it in when the user taps "apply" (the background service/worker only ever
-  /// reads this copy, never the gallery).
+  /// Path of the user-cropped image saved in the app's private dir
+  /// (filesDir/wallpaper_playlist/<home|lock>/<id>.jpg). Empty until the user
+  /// crops it (or the first apply center-crops and stores one).
   String filePath;
 
-  /// e.g. image/gif, image/webp, image/jpeg.
   final String mime;
-
-  /// Whether this is (or may be) an animated image.
-  ///
-  /// NOTE: mime alone is not enough — plenty of WebP files are static. So here
-  /// GIF counts as animated and everything else (WebP included) starts as
-  /// false; mode B's decoder is the real authority and overrides this later.
   bool animated;
+
+  bool get cropped => filePath.isNotEmpty;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -66,121 +64,86 @@ class WallpaperItem {
       );
 }
 
-/// How the wallpaper rotation behaves. Persisted alongside the item list.
+/// Rotation settings shared by both lists.
 class WallpaperSettings {
-  WallpaperSettings({
-    this.live = false,
-    this.intervalMinutes = 60,
-    this.loopsBeforeNext = 1,
-    this.liveSeconds = 0,
-    this.flags = flagSystem,
-    this.fit = 'crop',
-    this.shuffle = false,
-  });
+  WallpaperSettings({this.intervalMinutes = 60, this.shuffle = false});
 
-  /// Matches Android's WallpaperManager flags so the native side can pass them
-  /// straight through.
-  static const int flagSystem = 1; // FLAG_SYSTEM (home screen)
-  static const int flagLock = 2; // FLAG_LOCK (lock screen)
-
-  /// false = static rotation (mode A); true = live wallpaper (mode B).
-  bool live;
-
-  /// Mode A: minutes between swaps. WorkManager's real floor is ~15 min, so the
-  /// UI must not offer anything shorter (and must say "about", not "exactly").
+  /// Minutes between swaps. WorkManager's real floor is ~15 min.
   int intervalMinutes;
-
-  /// Mode B: advance to the next image after this many playback loops.
-  int loopsBeforeNext;
-
-  /// Mode B: alternatively, advance after this many seconds. Precedence is
-  /// fixed: if [liveSeconds] > 0 it wins; otherwise [loopsBeforeNext] is used.
-  int liveSeconds;
-
-  /// Mode A apply target: FLAG_SYSTEM / FLAG_LOCK (bitwise OR for both).
-  int flags;
-
-  /// 'crop' = center-crop to fill (default); 'contain' = fit whole image with a
-  /// backing color. 'contain' is only implemented in M4, so the UI disables it
-  /// until then.
-  String fit;
-
-  /// Play the list in a random order instead of list order.
   bool shuffle;
 
-  WallpaperSettings copyWith({
-    bool? live,
-    int? intervalMinutes,
-    int? loopsBeforeNext,
-    int? liveSeconds,
-    int? flags,
-    String? fit,
-    bool? shuffle,
-  }) =>
+  WallpaperSettings copyWith({int? intervalMinutes, bool? shuffle}) =>
       WallpaperSettings(
-        live: live ?? this.live,
         intervalMinutes: intervalMinutes ?? this.intervalMinutes,
-        loopsBeforeNext: loopsBeforeNext ?? this.loopsBeforeNext,
-        liveSeconds: liveSeconds ?? this.liveSeconds,
-        flags: flags ?? this.flags,
-        fit: fit ?? this.fit,
         shuffle: shuffle ?? this.shuffle,
       );
 
-  Map<String, dynamic> toJson() => {
-        'live': live,
-        'intervalMinutes': intervalMinutes,
-        'loopsBeforeNext': loopsBeforeNext,
-        'liveSeconds': liveSeconds,
-        'flags': flags,
-        'fit': fit,
-        'shuffle': shuffle,
-      };
+  Map<String, dynamic> toJson() =>
+      {'intervalMinutes': intervalMinutes, 'shuffle': shuffle};
 
   static WallpaperSettings fromJson(Map<String, dynamic> j) => WallpaperSettings(
-        live: (j['live'] as bool?) ?? false,
         intervalMinutes: (j['intervalMinutes'] as int?) ?? 60,
-        loopsBeforeNext: (j['loopsBeforeNext'] as int?) ?? 1,
-        liveSeconds: (j['liveSeconds'] as int?) ?? 0,
-        flags: (j['flags'] as int?) ?? flagSystem,
-        fit: (j['fit'] as String?) ?? 'crop',
         shuffle: (j['shuffle'] as bool?) ?? false,
       );
 }
 
-/// The playlist store. Load once in `main()` via [init].
+/// Two independent playlists (home / lock) plus shared settings, persisted via
+/// SharedPreferences. Cropped image files live in the app's private dir and are
+/// written by the native side; here we only track their paths.
 class WallpaperPlaylist {
   WallpaperPlaylist._();
 
-  static const _itemsKey = 'wallpaper_playlist_items';
+  static const _homeKey = 'wallpaper_home_items';
+  static const _lockKey = 'wallpaper_lock_items';
   static const _settingsKey = 'wallpaper_playlist_settings';
+  static const _oldItemsKey = 'wallpaper_playlist_items'; // pre-split single list
 
-  /// Ordered playlist entries. The UI listens to this.
-  static final ValueNotifier<List<WallpaperItem>> items =
+  static final ValueNotifier<List<WallpaperItem>> homeItems =
       ValueNotifier<List<WallpaperItem>>([]);
-
-  /// Rotation settings. The UI listens to this.
+  static final ValueNotifier<List<WallpaperItem>> lockItems =
+      ValueNotifier<List<WallpaperItem>>([]);
   static final ValueNotifier<WallpaperSettings> settings =
       ValueNotifier<WallpaperSettings>(WallpaperSettings());
 
+  static ValueNotifier<List<WallpaperItem>> listFor(WallpaperTarget t) =>
+      t == WallpaperTarget.home ? homeItems : lockItems;
+
   static Future<void> init() async {
     final p = await SharedPreferences.getInstance();
-    final rawItems = p.getString(_itemsKey);
-    if (rawItems != null && rawItems.isNotEmpty) {
+
+    List<WallpaperItem> parse(String? raw) {
+      if (raw == null || raw.isEmpty) return [];
       try {
-        final list = (jsonDecode(rawItems) as List)
+        return (jsonDecode(raw) as List)
             .map((e) => WallpaperItem.fromJson(e as Map<String, dynamic>))
             .toList();
-        items.value = list;
       } catch (_) {
-        items.value = [];
+        return [];
       }
     }
+
+    final rawHome = p.getString(_homeKey);
+    final rawLock = p.getString(_lockKey);
+
+    if (rawHome == null && rawLock == null) {
+      // Migrate the old single list (if any) into the home list.
+      final old = parse(p.getString(_oldItemsKey));
+      // Old entries were never really cropped; start fresh on filePath.
+      for (final it in old) {
+        it.filePath = '';
+      }
+      homeItems.value = old;
+      lockItems.value = [];
+    } else {
+      homeItems.value = parse(rawHome);
+      lockItems.value = parse(rawLock);
+    }
+
     final rawSettings = p.getString(_settingsKey);
     if (rawSettings != null && rawSettings.isNotEmpty) {
       try {
-        settings.value =
-            WallpaperSettings.fromJson(jsonDecode(rawSettings) as Map<String, dynamic>);
+        settings.value = WallpaperSettings.fromJson(
+            jsonDecode(rawSettings) as Map<String, dynamic>);
       } catch (_) {
         settings.value = WallpaperSettings();
       }
@@ -190,35 +153,40 @@ class WallpaperPlaylist {
   static Future<void> _persist() async {
     final p = await SharedPreferences.getInstance();
     await p.setString(
-        _itemsKey, jsonEncode(items.value.map((e) => e.toJson()).toList()));
+        _homeKey, jsonEncode(homeItems.value.map((e) => e.toJson()).toList()));
+    await p.setString(
+        _lockKey, jsonEncode(lockItems.value.map((e) => e.toJson()).toList()));
     await p.setString(_settingsKey, jsonEncode(settings.value.toJson()));
   }
 
-  static bool contains(String id) => items.value.any((e) => e.id == id);
-
-  /// Whether [asset] is an image type we accept into the playlist.
   static bool accepts(AssetEntity asset) {
     if (asset.type != AssetType.image) return false;
     return kWallpaperMimes.contains(_mimeOf(asset));
   }
 
-  /// Adds one asset. Returns true if it was added (false if unsupported or
+  static bool contains(WallpaperTarget t, String id) =>
+      listFor(t).value.any((e) => e.id == id);
+
+  /// Adds one asset to [t]. Returns true if added (false if unsupported or
   /// already present).
-  static Future<bool> add(AssetEntity asset) async {
-    if (!accepts(asset) || contains(asset.id)) return false;
+  static Future<bool> add(AssetEntity asset, WallpaperTarget t) async {
+    if (!accepts(asset) || contains(t, asset.id)) return false;
     final mime = _mimeOf(asset);
-    items.value = [
-      ...items.value,
+    final list = listFor(t);
+    list.value = [
+      ...list.value,
       WallpaperItem(id: asset.id, mime: mime, animated: _isGif(mime)),
     ];
     await _persist();
     return true;
   }
 
-  /// Adds several assets, skipping unsupported types and duplicates. Returns how
-  /// many were actually added.
-  static Future<int> addAll(Iterable<AssetEntity> assets) async {
-    final next = List<WallpaperItem>.from(items.value);
+  /// Adds several assets to [t], skipping unsupported / duplicates. Returns how
+  /// many were added.
+  static Future<int> addAll(
+      Iterable<AssetEntity> assets, WallpaperTarget t) async {
+    final list = listFor(t);
+    final next = List<WallpaperItem>.from(list.value);
     final have = next.map((e) => e.id).toSet();
     var added = 0;
     for (final a in assets) {
@@ -229,33 +197,48 @@ class WallpaperPlaylist {
       added++;
     }
     if (added > 0) {
-      items.value = next;
+      list.value = next;
       await _persist();
     }
     return added;
   }
 
-  static Future<void> removeAt(int index) async {
-    if (index < 0 || index >= items.value.length) return;
-    final next = List<WallpaperItem>.from(items.value)..removeAt(index);
-    items.value = next;
+  static Future<void> removeAt(WallpaperTarget t, int index) async {
+    final list = listFor(t);
+    if (index < 0 || index >= list.value.length) return;
+    final next = List<WallpaperItem>.from(list.value)..removeAt(index);
+    list.value = next;
     await _persist();
   }
 
-  static Future<void> reorder(int oldIndex, int newIndex) async {
-    final next = List<WallpaperItem>.from(items.value);
+  static Future<void> reorder(
+      WallpaperTarget t, int oldIndex, int newIndex) async {
+    final list = listFor(t);
+    final next = List<WallpaperItem>.from(list.value);
     if (oldIndex < 0 || oldIndex >= next.length) return;
-    // ReorderableListView reports newIndex assuming the item is still present.
     if (newIndex > oldIndex) newIndex -= 1;
     final moved = next.removeAt(oldIndex);
     next.insert(newIndex.clamp(0, next.length), moved);
-    items.value = next;
+    list.value = next;
     await _persist();
   }
 
-  static Future<void> clear() async {
-    if (items.value.isEmpty) return;
-    items.value = [];
+  static Future<void> clear(WallpaperTarget t) async {
+    final list = listFor(t);
+    if (list.value.isEmpty) return;
+    list.value = [];
+    await _persist();
+  }
+
+  /// Records the cropped file path for an entry in [t].
+  static Future<void> setCropped(
+      WallpaperTarget t, String id, String path) async {
+    final list = listFor(t);
+    final next = List<WallpaperItem>.from(list.value);
+    final i = next.indexWhere((e) => e.id == id);
+    if (i < 0) return;
+    next[i].filePath = path;
+    list.value = next;
     await _persist();
   }
 
@@ -266,8 +249,6 @@ class WallpaperPlaylist {
 
   // ---- helpers ----------------------------------------------------------
 
-  /// Best-effort mime for an asset: prefer the reported mime, fall back to the
-  /// file extension in the title.
   static String _mimeOf(AssetEntity asset) {
     final m = asset.mimeType?.toLowerCase();
     if (m != null && m.isNotEmpty) return m;

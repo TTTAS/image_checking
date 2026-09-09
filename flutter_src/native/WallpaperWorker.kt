@@ -26,90 +26,107 @@ import java.io.File
 /// Flutter. GIF / animated WebP only show their first frame in this mode — real
 /// animation is the live wallpaper (mode B / M3).
 object WallpaperStore {
-    private const val DIR = "wallpaper_playlist"
-    private const val MANIFEST = "wallpaper_playlist.json"
+    private const val ROOT = "wallpaper_playlist"
+    private const val MANIFEST = "wallpaper_rotation.json"
     const val WORK_NAME = "wallpaper_rotate"
-
-    private fun dir(context: Context): File =
-        File(context.filesDir, DIR).apply { if (!exists()) mkdirs() }
 
     private fun manifestFile(context: Context): File =
         File(context.filesDir, MANIFEST)
 
-    /// Copies [sources] into the private dir, writes the manifest, and sets the
-    /// first image immediately. Returns how many files were successfully copied.
-    fun setup(
+    private fun cropDir(context: Context, side: String): File =
+        File(context.filesDir, "$ROOT/$side").apply { if (!exists()) mkdirs() }
+
+    private fun sanitize(s: String): String = s.replace(Regex("[^A-Za-z0-9_-]"), "_")
+
+    /// Saves already-cropped PNG bytes (from the Dart crop page) as a JPEG at
+    /// <side>/<id>.jpg. Returns the absolute path. ("儲存裁切" / "設為桌布")
+    fun saveCropBytes(context: Context, bytes: ByteArray, side: String, id: String): String {
+        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+            ?: throw IllegalStateException("無法解碼圖片")
+        return saveJpeg(context, bmp, side, id)
+    }
+
+    /// Center-crops an original file to the screen and saves it as <side>/<id>.jpg.
+    /// Used at apply time for entries the user never cropped.
+    fun centerCropSave(context: Context, srcPath: String, side: String, id: String): String {
+        val (w, h) = screenSize(context)
+        val src = decodeScaled(srcPath, w, h) ?: throw IllegalStateException("無法解碼圖片")
+        val out = centerCrop(src, w, h)
+        return saveJpeg(context, out, side, id)
+    }
+
+    private fun saveJpeg(context: Context, bmp: Bitmap, side: String, id: String): String {
+        val f = File(cropDir(context, side), "${sanitize(id)}.jpg")
+        f.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        return f.absolutePath
+    }
+
+    /// Schedules rotation for both lists. [homePaths]/[lockPaths] are ordered
+    /// cropped-file paths; either may be empty (that side simply won't rotate).
+    /// Sets the first image of each side immediately.
+    fun applyRotation(
         context: Context,
-        sources: List<String>,
-        flags: Int,
-        fit: String,
+        homePaths: List<String>,
+        lockPaths: List<String>,
         shuffle: Boolean,
-    ): Int {
-        val dir = dir(context)
-        // Fresh copy every time "apply" is pressed — no incremental sync.
-        dir.listFiles()?.forEach { it.delete() }
-
-        val copied = mutableListOf<String>()
-        for ((i, src) in sources.withIndex()) {
-            try {
-                val from = File(src)
-                if (!from.exists()) continue
-                val ext = from.extension.ifEmpty { "img" }
-                val dst = File(dir, "$i.$ext")
-                from.inputStream().use { input ->
-                    dst.outputStream().use { output -> input.copyTo(output) }
-                }
-                copied.add(dst.absolutePath)
-            } catch (_: Exception) {
-                // Skip a bad source instead of failing the whole apply.
-            }
+    ) {
+        val root = JSONObject().apply {
+            put("home", JSONArray(homePaths))
+            put("lock", JSONArray(lockPaths))
+            put("homeOrder", JSONArray(order(homePaths.size, shuffle)))
+            put("lockOrder", JSONArray(order(lockPaths.size, shuffle)))
+            put("homePos", 0)
+            put("lockPos", 0)
         }
-        if (copied.isEmpty()) return 0
-
-        val order = copied.indices.toMutableList()
-        if (shuffle) order.shuffle()
-
-        val json = JSONObject().apply {
-            put("paths", JSONArray(copied))
-            put("order", JSONArray(order))
-            put("pos", 0)
-            put("flags", flags)
-            put("fit", fit)
-        }
-        manifestFile(context).writeText(json.toString())
-
-        // Show the first one right away so "apply" has an instant effect.
-        setCurrent(context)
-        return copied.size
+        manifestFile(context).writeText(root.toString())
+        applyAt(context, root, "home", "homeOrder", 0, 1) // FLAG_SYSTEM
+        applyAt(context, root, "lock", "lockOrder", 0, 2) // FLAG_LOCK
     }
 
-    /// Sets the image at the current position.
-    private fun setCurrent(context: Context) {
-        val json = readManifest(context) ?: return
-        val paths = json.optJSONArray("paths") ?: return
-        val order = json.optJSONArray("order") ?: return
-        if (order.length() == 0) return
-        val pos = json.optInt("pos", 0).coerceIn(0, order.length() - 1)
-        val idx = order.optInt(pos, 0)
-        val path = paths.optString(idx, "")
-        if (path.isEmpty()) return
-        applyFile(context, path, json.optInt("flags", 1), json.optString("fit", "crop"))
+    private fun order(n: Int, shuffle: Boolean): List<Int> {
+        val l = (0 until n).toMutableList()
+        if (shuffle) l.shuffle()
+        return l
     }
 
-    /// Advances to the next image and sets it. Called by the periodic worker.
+    /// Advances both sides to their next image. Called by the periodic worker.
     fun advance(context: Context) {
-        val json = readManifest(context) ?: return
-        val order = json.optJSONArray("order") ?: return
-        val paths = json.optJSONArray("paths") ?: return
+        val root = readManifest(context) ?: return
+        advanceSide(context, root, "home", "homeOrder", "homePos", 1)
+        advanceSide(context, root, "lock", "lockOrder", "lockPos", 2)
+        manifestFile(context).writeText(root.toString())
+    }
+
+    private fun advanceSide(
+        context: Context,
+        root: JSONObject,
+        pathsKey: String,
+        orderKey: String,
+        posKey: String,
+        flag: Int,
+    ) {
+        val order = root.optJSONArray(orderKey) ?: return
         if (order.length() == 0) return
-        val next = (json.optInt("pos", 0) + 1) % order.length()
-        json.put("pos", next)
-        manifestFile(context).writeText(json.toString())
-        val idx = order.optInt(next, 0)
+        val next = (root.optInt(posKey, 0) + 1) % order.length()
+        root.put(posKey, next)
+        applyAt(context, root, pathsKey, orderKey, next, flag)
+    }
+
+    private fun applyAt(
+        context: Context,
+        root: JSONObject,
+        pathsKey: String,
+        orderKey: String,
+        pos: Int,
+        flag: Int,
+    ) {
+        val paths = root.optJSONArray(pathsKey) ?: return
+        val order = root.optJSONArray(orderKey) ?: return
+        if (order.length() == 0) return
+        val p = pos.coerceIn(0, order.length() - 1)
+        val idx = order.optInt(p, 0)
         val path = paths.optString(idx, "")
-        if (path.isNotEmpty()) {
-            applyFile(context, path, json.optInt("flags", 1), json.optString("fit", "crop"))
-        }
+        if (path.isNotEmpty()) applyFile(context, path, flag)
     }
 
     private fun readManifest(context: Context): JSONObject? {
@@ -121,13 +138,13 @@ object WallpaperStore {
         }
     }
 
-    /// Decodes [path] (down-sampled to the screen), center-crops it to fill, and
-    /// sets it as the wallpaper for the requested screens ([flags]).
-    private fun applyFile(context: Context, path: String, flags: Int, fit: String) {
+    /// Decodes a cropped file and sets it for [flags]. Cropped files are already
+    /// screen-ratio, so the center-crop here is a safe no-op.
+    private fun applyFile(context: Context, path: String, flags: Int) {
         try {
             val (w, h) = screenSize(context)
             val bmp = decodeScaled(path, w, h) ?: return
-            val out = if (fit == "contain") bmp else centerCrop(bmp, w, h)
+            val out = centerCrop(bmp, w, h)
             applyBitmap(context, out, flags)
         } catch (_: Exception) {
             // A bad frame must never crash the worker or the app.

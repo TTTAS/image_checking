@@ -22,27 +22,45 @@ class NativeWallpaper {
     return honored ?? true;
   }
 
-  /// Applies the static rotation (mode A): copies the given source files into
-  /// the app's private dir, sets the first one as the wallpaper immediately, and
-  /// schedules a periodic background job (WorkManager) to advance to the next
-  /// one about every [intervalMinutes] minutes.
-  ///
-  /// [items] is an ordered list of `{'id', 'path', 'mime', 'animated'}` maps;
-  /// [path] is a readable file path (from photo_manager's `AssetEntity.file`).
-  /// [flags] is a bitmask (1 = home screen, 2 = lock screen).
-  /// Throws [PlatformException] on failure.
-  static Future<void> applyStatic({
-    required List<Map<String, dynamic>> items,
+  /// Saves the cropped image (PNG [bytes] from the in-app crop page) as a JPEG in
+  /// the app's private dir under [side] ("home"/"lock") keyed by [id]. Returns
+  /// the saved file path. Does NOT change the wallpaper.
+  static Future<String> saveCrop(Uint8List bytes, String side, String id) async {
+    final path = await _channel.invokeMethod<String>('saveCrop', {
+      'bytes': bytes,
+      'side': side,
+      'id': id,
+    });
+    return path ?? '';
+  }
+
+  /// Center-crops an original file at [srcPath] to the screen and saves it under
+  /// [side]/[id].jpg. Used at apply time for entries the user never cropped.
+  /// Returns the saved file path.
+  static Future<String> centerCropSave(
+      String srcPath, String side, String id) async {
+    final path = await _channel.invokeMethod<String>('centerCropSave', {
+      'srcPath': srcPath,
+      'side': side,
+      'id': id,
+    });
+    return path ?? '';
+  }
+
+  /// Applies the static rotation for both lists. [homePaths]/[lockPaths] are
+  /// ordered cropped-file paths (either may be empty). Sets the first of each
+  /// side now and schedules a periodic job to advance about every
+  /// [intervalMinutes] minutes. Throws [PlatformException] on failure.
+  static Future<void> applyRotation({
+    required List<String> homePaths,
+    required List<String> lockPaths,
     required int intervalMinutes,
-    required int flags,
-    required String fit,
     required bool shuffle,
   }) async {
-    await _channel.invokeMethod<bool>('applyStaticWallpaper', {
-      'items': items,
+    await _channel.invokeMethod<bool>('applyRotation', {
+      'home': homePaths,
+      'lock': lockPaths,
       'intervalMinutes': intervalMinutes,
-      'flags': flags,
-      'fit': fit,
       'shuffle': shuffle,
     });
   }
