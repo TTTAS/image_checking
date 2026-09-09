@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
@@ -23,10 +24,20 @@ import 'wallpaper_playlist.dart';
 ///  * single ([target] == null, from the viewer): a one-off set with a
 ///    home/lock/both chooser; does not touch any playlist.
 class WallpaperCropPage extends StatefulWidget {
-  const WallpaperCropPage({super.key, required this.asset, this.target});
+  const WallpaperCropPage({
+    super.key,
+    required this.asset,
+    this.target,
+    this.basePath,
+  });
 
   final AssetEntity asset;
   final WallpaperTarget? target;
+
+  /// Playlist mode only: path of this entry's previously-cropped file. If set,
+  /// the crop starts from that saved crop (so re-entering shows the last crop)
+  /// instead of re-covering the original.
+  final String? basePath;
 
   @override
   State<WallpaperCropPage> createState() => _WallpaperCropPageState();
@@ -38,6 +49,19 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
 
   bool _centered = false;
   bool _busy = false;
+
+  bool get _useBase =>
+      _isPlaylist && widget.basePath != null && widget.basePath!.isNotEmpty;
+
+  @override
+  void initState() {
+    super.initState();
+    // Read the latest saved crop, not a stale cached copy of the same path.
+    if (_useBase) {
+      PaintingBinding.instance.imageCache
+          .evict(FileImage(File(widget.basePath!)));
+    }
+  }
 
   // Single-mode target screens (home only by default). Unused in playlist mode.
   int _flags = kFlagSystem;
@@ -153,10 +177,13 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
     final mq = MediaQuery.of(context);
     final cropAspect = mq.size.width / mq.size.height;
     final screenWpx = (mq.size.width * mq.devicePixelRatio).round();
-    final provider = ResizeImage(
-      AssetEntityImageProvider(widget.asset, isOriginal: true),
-      width: screenWpx,
-    );
+    // Re-crop starts from the previously-saved crop file; otherwise the original.
+    final ImageProvider provider = _useBase
+        ? FileImage(File(widget.basePath!))
+        : ResizeImage(
+            AssetEntityImageProvider(widget.asset, isOriginal: true),
+            width: screenWpx,
+          );
 
     return Scaffold(
       backgroundColor: Colors.black,
@@ -181,11 +208,14 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                       builder: (context, constraints) {
                         final bw = constraints.maxWidth;
                         final bh = constraints.maxHeight;
+                        final boxAspect = bw / bh;
                         final iw = widget.asset.width.toDouble();
                         final ih = widget.asset.height.toDouble();
-                        final imgAspect =
-                            (iw > 0 && ih > 0) ? iw / ih : (bw / bh);
-                        final boxAspect = bw / bh;
+                        // A saved crop is already screen-ratio, so treat it as the
+                        // box aspect (fills the frame, showing the last crop).
+                        final imgAspect = _useBase
+                            ? boxAspect
+                            : ((iw > 0 && ih > 0) ? iw / ih : boxAspect);
                         double cw, ch;
                         if (imgAspect > boxAspect) {
                           ch = bh;

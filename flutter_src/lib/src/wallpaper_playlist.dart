@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -206,9 +207,13 @@ class WallpaperPlaylist {
   static Future<void> removeAt(WallpaperTarget t, int index) async {
     final list = listFor(t);
     if (index < 0 || index >= list.value.length) return;
+    final removed = list.value[index];
     final next = List<WallpaperItem>.from(list.value)..removeAt(index);
     list.value = next;
     await _persist();
+    // Delete this entry's cropped cache file (app-private jpg, NOT the gallery
+    // original). Ignore failures.
+    await _deleteCrop(removed.filePath);
   }
 
   static Future<void> reorder(
@@ -226,8 +231,23 @@ class WallpaperPlaylist {
   static Future<void> clear(WallpaperTarget t) async {
     final list = listFor(t);
     if (list.value.isEmpty) return;
+    final gone = List<WallpaperItem>.from(list.value);
     list.value = [];
     await _persist();
+    for (final it in gone) {
+      await _deleteCrop(it.filePath);
+    }
+  }
+
+  /// Deletes a cropped cache file (app-private). Never touches gallery originals.
+  static Future<void> _deleteCrop(String path) async {
+    if (path.isEmpty) return;
+    try {
+      final f = File(path);
+      if (await f.exists()) await f.delete();
+    } catch (_) {
+      // best-effort
+    }
   }
 
   /// Records the cropped file path for an entry in [t].

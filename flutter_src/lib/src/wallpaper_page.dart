@@ -38,7 +38,11 @@ class _WallpaperPageState extends State<WallpaperPage> {
       return;
     }
     navigator.push(MaterialPageRoute<void>(
-      builder: (_) => WallpaperCropPage(asset: asset, target: target),
+      builder: (_) => WallpaperCropPage(
+        asset: asset,
+        target: target,
+        basePath: item.filePath.isEmpty ? null : item.filePath,
+      ),
     ));
   }
 
