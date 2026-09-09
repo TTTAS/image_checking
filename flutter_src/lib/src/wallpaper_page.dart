@@ -76,7 +76,7 @@ class _WallpaperPageState extends State<WallpaperPage> {
           const SnackBar(content: Text('兩個清單都是空的，先加入圖片')));
       return;
     }
-    if (home.any(_looksAnimated)) {
+    if (home.isNotEmpty) {
       await _applyLive();
       if (lock.isNotEmpty) await _applyLockOnly();
     } else {
@@ -207,8 +207,7 @@ class _WallpaperPageState extends State<WallpaperPage> {
     try {
       await NativeWallpaper.cancelRotation();
       messenger.showSnackBar(const SnackBar(
-        content: Text(
-            '已停止靜態輪播排程。若主畫面是動態桌布，請到系統「桌布」改回別張。'),
+        content: Text('已停止靜態輪播排程。若主畫面是動態桌布，請到系統「桌布」改回別張。'),
       ));
     } on PlatformException catch (e) {
       messenger.showSnackBar(
@@ -268,8 +267,8 @@ class _WallpaperPageState extends State<WallpaperPage> {
           const Padding(
             padding: EdgeInsets.fromLTRB(12, 10, 12, 0),
             child: Text(
-              '主畫面清單若有 GIF／動態 WebP，套用時會開系統「動態桌布」預覽（必須按設定才會動）。'
-              '鎖定清單維持靜態輪播，鎖屏不保證播動畫。',
+              '套用主畫面會開系統「動態桌布」預覽（看起來像只編第一張，按設定即可，不是本 App 裁切頁）。'
+              '換張間隔用下面的秒數。鎖定清單仍是靜態，最短約 15 分鐘。',
               style: TextStyle(fontSize: 12),
               textAlign: TextAlign.center,
             ),
@@ -466,7 +465,7 @@ class _IntervalBar extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                'GIF 每張播多久換下一張（現在 ${_label(current)}；改完要再按套用）',
+                '主畫面每張播多久換下一張（現在 ${_label(current)}；改完要再按套用）',
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 6),
@@ -560,7 +559,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               child: Text('輪播設定',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
             ),
-            const Text('靜態切換間隔（鎖定，以及主畫面沒有 GIF 時）',
+            const Text('鎖定畫面靜態輪播間隔（最短約 15 分鐘）',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
             const SizedBox(height: 6),
             Wrap(
