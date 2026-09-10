@@ -1,0 +1,22 @@
+
+// PLAY_UPLOAD_SIGNING
+def _kpFile = rootProject.file("key.properties")
+if (_kpFile.exists()) {
+    def _kp = new Properties()
+    _kp.load(new FileInputStream(_kpFile))
+    android {
+        signingConfigs {
+            release {
+                keyAlias _kp['keyAlias']
+                keyPassword _kp['keyPassword']
+                storeFile file(_kp['storeFile'])
+                storePassword _kp['storePassword']
+            }
+        }
+        buildTypes {
+            release {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+}

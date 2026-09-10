@@ -1,16 +1,17 @@
 name: Build APK and AAB
 
-# 手動觸發，或每次 push 都自動 build
 on:
   workflow_dispatch:
   push:
-    branches: [ main, master, 'claude/**' ]
+    branches:
+      - main
+      - master
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write   # 建立 Release 需要
+      contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -29,7 +30,7 @@ jobs:
 
       - name: Assemble Flutter project from flutter_src
         run: |
-          flutter create --platforms=android --project-name photo_album --org com.tttas.photoalbum .
+          flutter create --platforms=android --project-name photoalbum --org com.tttas .
           cp flutter_src/pubspec.yaml pubspec.yaml
           rm -rf lib
           cp -r flutter_src/lib lib
@@ -38,48 +39,30 @@ jobs:
       - name: Inject photo-library permissions
         run: |
           MANIFEST=android/app/src/main/AndroidManifest.xml
-          perl -0pi -e 's/(<manifest[^>]*>)/$1\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" \/>\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" \/>\n    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" \/>\n    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" \/>\n    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" \/>\n    <uses-permission android:name="android.permission.SET_WALLPAPER" \/>/' "$MANIFEST"
-
-          # WorkManager on-demand init: use our custom Application and remove the
-          # default startup initializer so WorkManager stays off the launch path.
+          perl -0pi -e 's/(<manifest[^>]*>)/$1\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" \/>\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" \/>\n    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" \/>\n    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION" \/>\n    <uses-permission android:name="android.permission.SET_WALLPAPER" \/>/' "$MANIFEST"
           grep -q 'xmlns:tools' "$MANIFEST" || sed -i 's|<manifest |<manifest xmlns:tools="http://schemas.android.com/tools" |' "$MANIFEST"
           sed -i 's|[$]{applicationName}|.PhotoApplication|g' "$MANIFEST"
           grep -q 'WorkManagerInitializer' "$MANIFEST" || perl -0pi -e 's/(<\/application>)/        <provider android:name="androidx.startup.InitializationProvider" android:authorities="\${applicationId}.androidx-startup" android:exported="false" tools:node="merge">\n            <meta-data android:name="androidx.work.WorkManagerInitializer" tools:node="remove" \/>\n        <\/provider>\n    $1/' "$MANIFEST"
-
-          # Register the Live Wallpaper service (mode B).
           grep -q 'PlaylistWallpaperService' "$MANIFEST" || perl -0pi -e 's/(<\/application>)/        <service android:name=".PlaylistWallpaperService" android:exported="true" android:label="\@string\/playlist_wallpaper_label" android:permission="android.permission.BIND_WALLPAPER">\n            <intent-filter>\n                <action android:name="android.service.wallpaper.WallpaperService" \/>\n            <\/intent-filter>\n            <meta-data android:name="android.service.wallpaper" android:resource="\@xml\/playlist_wallpaper" \/>\n        <\/service>\n    $1/' "$MANIFEST"
-          echo "----- AndroidManifest.xml -----"
-          cat "$MANIFEST"
 
       - name: Inject native Kotlin code
         run: |
           GEN=$(find android/app/src/main -name MainActivity.kt | head -1)
-          echo "generated MainActivity: $GEN"
           PKG=$(grep -m1 '^package ' "$GEN" | sed 's/^package //; s/[[:space:]]*$//')
           PKGDIR=$(dirname "$GEN")
-          echo "package: $PKG    dir: $PKGDIR"
-          # Copy every native .kt over the generated package dir, replacing the
-          # __PACKAGE__ placeholder with the real package name.
           for kt in flutter_src/native/*.kt; do
             name=$(basename "$kt")
             sed "s/__PACKAGE__/$PKG/" "$kt" > "$PKGDIR/$name"
-            echo "injected $name"
           done
-          ls -1 "$PKGDIR"
-          # Live-wallpaper resources (xml descriptor + strings). Our values file is
-          # named wallpaper_strings.xml so it merges without clobbering strings.xml.
           if [ -d flutter_src/native/res ]; then
             mkdir -p android/app/src/main/res/xml android/app/src/main/res/values
             cp flutter_src/native/res/xml/*.xml android/app/src/main/res/xml/ 2>/dev/null || true
             cp flutter_src/native/res/values/*.xml android/app/src/main/res/values/ 2>/dev/null || true
-            echo "copied res:"; ls -1 android/app/src/main/res/xml android/app/src/main/res/values
           fi
 
-      - name: Inject WorkManager dependency + proguard keep rules
+      - name: Inject WorkManager dependency
         run: |
           APP_GRADLE=$(ls android/app/build.gradle.kts android/app/build.gradle 2>/dev/null | head -1)
-          echo "app gradle: $APP_GRADLE"
-          # Keep rules so release R8 doesn't strip WorkManager's Room impl.
           cp flutter_src/native/proguard-rules.pro android/app/proguard-rules.pro
           if grep -q 'work-runtime' "$APP_GRADLE"; then
             echo "work dep already present"
@@ -88,25 +71,28 @@ jobs:
           else
             printf '\ndependencies {\n    implementation "androidx.work:work-runtime-ktx:2.9.1"\n}\n' >> "$APP_GRADLE"
           fi
-          # Point the release build at our keep rules (keeps minify on, small APK).
-          if grep -q 'WALLPAPER_PROGUARD' "$APP_GRADLE"; then
-            echo "proguard override already present"
-          elif [[ "$APP_GRADLE" == *.kts ]]; then
-            printf '\n// WALLPAPER_PROGUARD\nandroid {\n    buildTypes {\n        getByName("release") {\n            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")\n        }\n    }\n}\n' >> "$APP_GRADLE"
-          else
-            printf '\n// WALLPAPER_PROGUARD\nandroid {\n    buildTypes {\n        release {\n            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"\n        }\n    }\n}\n' >> "$APP_GRADLE"
+
+      - name: Install Play upload keystore and patch Gradle
+        env:
+          UPLOAD_KEYSTORE_BASE64: ${{ secrets.UPLOAD_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.UPLOAD_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.UPLOAD_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.UPLOAD_KEY_ALIAS }}
+        run: |
+          if [ -z "$UPLOAD_KEYSTORE_BASE64" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ] || [ -z "$KEY_ALIAS" ]; then
+            echo "Missing upload keystore GitHub secrets"
+            exit 1
           fi
-          echo "----- $APP_GRADLE (tail) -----"
-          tail -20 "$APP_GRADLE"
+          echo "$UPLOAD_KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
+          printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=upload-keystore.jks\n' \
+            "$STORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > android/key.properties
+          python3 flutter_src/native/patch_play_signing.py
 
       - name: Build release APK and AAB
         run: |
           flutter pub get
           if [ -f assets/icon/logo.png ]; then
-            echo "找到自訂 logo，產生 App 圖示..."
             dart run flutter_launcher_icons
-          else
-            echo "沒有 assets/icon/logo.png，使用預設圖示"
           fi
           flutter build apk --release
           flutter build appbundle --release
@@ -125,18 +111,12 @@ jobs:
           path: build/app/outputs/bundle/release/app-release.aab
           if-no-files-found: error
 
-      # 把 APK / AAB 發到 Release。
-      # APK：https://github.com/TTTAS/image_checking/releases/download/apk-latest/app-release.apk
-      # AAB：https://github.com/TTTAS/image_checking/releases/download/apk-latest/app-release.aab
       - name: Publish APK and AAB to a Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-latest
-          name: 最新建置（APK + AAB）
-          body: |
-            由分支 `${{ github.ref_name }}` 的 commit `${{ github.sha }}` 自動建置。
-            - 手機直接安裝：下 `app-release.apk`
-            - 上傳 Google Play：下 `app-release.aab`
+          name: Latest build (APK + AAB)
           files: |
             build/app/outputs/flutter-apk/app-release.apk
             build/app/outputs/bundle/release/app-release.aab
