@@ -1,14 +1,40 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
+
+PLAY_APPLICATION_ID = "com.tttas.photoalbum"
 
 kts = Path("android/app/build.gradle.kts")
 groovy = Path("android/app/build.gradle")
 
+def force_application_id_kts(text: str) -> str:
+    if re.search(r'applicationId\s*=', text):
+        return re.sub(
+            r'applicationId\s*=\s*"[^"]+"',
+            f'applicationId = "{PLAY_APPLICATION_ID}"',
+            text,
+            count=1,
+        )
+    return text.replace(
+        "android {",
+        f'android {{\n    defaultConfig {{\n        applicationId = "{PLAY_APPLICATION_ID}"\n    }}\n',
+        1,
+    )
+
+def force_application_id_groovy(text: str) -> str:
+    if re.search(r'applicationId\s+', text):
+        return re.sub(
+            r'applicationId\s+"[^"]+"',
+            f'applicationId "{PLAY_APPLICATION_ID}"',
+            text,
+            count=1,
+        )
+    return text
+
 if kts.exists():
     text = kts.read_text()
-    if "PLAY_UPLOAD_SIGNING" in text:
-        print("kts already patched")
-    else:
+    text = force_application_id_kts(text)
+    if "PLAY_UPLOAD_SIGNING" not in text:
         if "import java.util.Properties" not in text:
             text = (
                 "import java.util.Properties\n"
@@ -42,7 +68,7 @@ if (keystorePropertiesFile.exists()) {
             'signingConfig = signingConfigs.getByName("debug")',
             'signingConfig = signingConfigs.getByName("release")',
         )
-        if 'proguardFiles(' not in text:
+        if "proguardFiles(" not in text:
             text = text.replace(
                 'signingConfig = signingConfigs.getByName("release")',
                 'signingConfig = signingConfigs.getByName("release")\n'
@@ -52,29 +78,12 @@ if (keystorePropertiesFile.exists()) {
                 '            )',
                 1,
             )
-        kts.write_text(text)
-        print("patched", kts)
-        print(text)
+    kts.write_text(text)
+    print("patched", kts)
+    print(text)
 elif groovy.exists():
-    text = groovy.read_text()
-    if "PLAY_UPLOAD_SIGNING" in text:
-        print("groovy already patched")
-    else:
-        loader = """
-// PLAY_UPLOAD_SIGNING
-def keystoreProperties = new Properties()
-def keystorePropertiesFile = rootProject.file('key.properties')
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
-}
-
-"""
-        text = loader + text
-        text = text.replace(
-            'signingConfig signingConfigs.debug',
-            'signingConfig signingConfigs.release',
-        )
-        groovy.write_text(text)
-        print("patched", groovy)
+    text = force_application_id_groovy(groovy.read_text())
+    groovy.write_text(text)
+    print("patched", groovy)
 else:
     raise SystemExit("no app gradle file found")
