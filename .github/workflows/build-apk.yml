@@ -3,6 +3,7 @@ name: Build APK and AAB
 # 手動觸發，或每次 push 都自動 build
 on:
   workflow_dispatch:
+  pull_request:
   push:
     branches: [ main, master, 'claude/**' ]
 
@@ -99,6 +100,85 @@ jobs:
           echo "----- $APP_GRADLE (tail) -----"
           tail -20 "$APP_GRADLE"
 
+      - name: Install Play upload keystore
+        env:
+          UPLOAD_KEYSTORE_BASE64: ${{ secrets.UPLOAD_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.UPLOAD_KEYSTORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.UPLOAD_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.UPLOAD_KEY_ALIAS }}
+        run: |
+          if [ -z "$UPLOAD_KEYSTORE_BASE64" ] || [ -z "$STORE_PASSWORD" ] || [ -z "$KEY_PASSWORD" ] || [ -z "$KEY_ALIAS" ]; then
+            echo "Missing upload keystore GitHub secrets"
+            exit 1
+          fi
+          echo "$UPLOAD_KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
+          python3 - << 'PY'
+          import os
+          from pathlib import Path
+          Path("android/key.properties").write_text(
+              "storePassword={}\nkeyPassword={}\nkeyAlias={}\nstoreFile=upload-keystore.jks\n".format(
+                  os.environ["STORE_PASSWORD"],
+                  os.environ["KEY_PASSWORD"],
+                  os.environ["KEY_ALIAS"],
+              )
+          )
+          print("wrote android/key.properties")
+          PY
+          APP_GRADLE=$(ls android/app/build.gradle.kts android/app/build.gradle 2>/dev/null | head -1)
+          if grep -q 'PLAY_UPLOAD_SIGNING' "$APP_GRADLE"; then
+            echo "signing override already present"
+          elif [[ "$APP_GRADLE" == *.kts ]]; then
+            cat >> "$APP_GRADLE" << 'EOF'
+
+// PLAY_UPLOAD_SIGNING
+val _kpFile = rootProject.file("key.properties")
+if (_kpFile.exists()) {
+    val _kp = java.util.Properties()
+    _kp.load(_kpFile.inputStream())
+    android {
+        signingConfigs {
+            create("release") {
+                keyAlias = _kp.getProperty("keyAlias")
+                keyPassword = _kp.getProperty("keyPassword")
+                storeFile = file(_kp.getProperty("storeFile"))
+                storePassword = _kp.getProperty("storePassword")
+            }
+        }
+        buildTypes {
+            getByName("release") {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
+}
+EOF
+          else
+            cat >> "$APP_GRADLE" << 'EOF'
+
+// PLAY_UPLOAD_SIGNING
+def _kpFile = rootProject.file("key.properties")
+if (_kpFile.exists()) {
+    def _kp = new Properties()
+    _kp.load(new FileInputStream(_kpFile))
+    android {
+        signingConfigs {
+            release {
+                keyAlias _kp['keyAlias']
+                keyPassword _kp['keyPassword']
+                storeFile file(_kp['storeFile'])
+                storePassword _kp['storePassword']
+            }
+        }
+        buildTypes {
+            release {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+}
+EOF
+          fi
+
       - name: Build release APK and AAB
         run: |
           flutter pub get
@@ -125,10 +205,11 @@ jobs:
           path: build/app/outputs/bundle/release/app-release.aab
           if-no-files-found: error
 
-      # 把 APK / AAB 發到 Release。
+      # 只在 main 發 Release，避免 PR 建置覆蓋 apk-latest。
       # APK：https://github.com/TTTAS/image_checking/releases/download/apk-latest/app-release.apk
       # AAB：https://github.com/TTTAS/image_checking/releases/download/apk-latest/app-release.aab
       - name: Publish APK and AAB to a Release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-latest
