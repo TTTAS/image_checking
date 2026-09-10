@@ -112,7 +112,7 @@ class PlaylistWallpaperService : WallpaperService() {
                     items.add(
                         Item(
                             path = o.optString("path", ""),
-                            zoom = o.optDouble("zoom", 1.0).toFloat(),
+                            zoom = o.optDouble("zoom", 0.0).toFloat(),
                             fx = o.optDouble("focusX", 0.5).toFloat(),
                             fy = o.optDouble("focusY", 0.5).toFloat(),
                             animated = o.optBoolean("animated", false),
@@ -242,8 +242,11 @@ class PlaylistWallpaperService : WallpaperService() {
         private fun computeTransform(item: Item, w: Int, h: Int) {
             imgW = w
             imgH = h
+            val contain = minOf(surfaceW.toFloat() / w, surfaceH.toFloat() / h)
             val cover = maxOf(surfaceW.toFloat() / w, surfaceH.toFloat() / h)
-            drawScale = cover * item.zoom.coerceAtLeast(0.1f)
+            // zoom <= 0: fit entire image centered (letterbox).
+            // zoom == 1: classic cover-center crop. >1 further zoom.
+            drawScale = if (item.zoom <= 0f) contain else cover * item.zoom.coerceAtLeast(0.1f)
             drawLeft = surfaceW / 2f - drawScale * item.fx * w
             drawTop = surfaceH / 2f - drawScale * item.fy * h
         }

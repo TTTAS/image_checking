@@ -29,7 +29,7 @@ class WallpaperItem {
     required this.mime,
     required this.animated,
     this.filePath = '',
-    this.cropZoom = 1.0,
+    this.cropZoom = 0.0,
     this.cropFocusX = 0.5,
     this.cropFocusY = 0.5,
   });
@@ -59,7 +59,7 @@ class WallpaperItem {
         filePath: (j['filePath'] as String?) ?? '',
         mime: (j['mime'] as String?) ?? '',
         animated: (j['animated'] as bool?) ?? false,
-        cropZoom: (j['cropZoom'] as num?)?.toDouble() ?? 1.0,
+        cropZoom: (j['cropZoom'] as num?)?.toDouble() ?? 0.0,
         cropFocusX: (j['cropFocusX'] as num?)?.toDouble() ?? 0.5,
         cropFocusY: (j['cropFocusY'] as num?)?.toDouble() ?? 0.5,
       );
