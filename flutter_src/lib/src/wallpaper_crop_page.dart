@@ -18,18 +18,14 @@ import 'wallpaper_playlist.dart';
 /// recover parts that were previously cropped off. On confirm we capture the
 /// crop frame to a screen-sized bitmap (WYSIWYG).
 ///
-/// Two modes:
-///  * playlist ([target] != null): "儲存裁切" saves the crop file + transform into
-///    that list (no wallpaper change); "設為桌布" also sets that side now
-///    (home=FLAG_SYSTEM, lock=FLAG_LOCK).
-///  * single ([target] == null, from the viewer): a one-off set with a
-///    home/lock/both chooser; does not touch any playlist.
+/// Default (zoom <= 0) = fit the entire image inside the screen, centered,
+/// with letterbox bars. Pinch-zoom in to fill / crop.
 class WallpaperCropPage extends StatefulWidget {
   const WallpaperCropPage({
     super.key,
     required this.asset,
     this.target,
-    this.initialZoom = 1.0,
+    this.initialZoom = 0.0,
     this.initialFocusX = 0.5,
     this.initialFocusY = 0.5,
   });
@@ -37,7 +33,8 @@ class WallpaperCropPage extends StatefulWidget {
   final AssetEntity asset;
   final WallpaperTarget? target;
 
-  /// Saved crop transform to restore (playlist mode). Defaults == cover-centered.
+  /// Saved crop transform to restore (playlist mode).
+  /// <= 0 means "fit entire image, centered" (the default).
   final double initialZoom;
   final double initialFocusX;
   final double initialFocusY;
@@ -53,11 +50,8 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
   bool _applied = false;
   bool _busy = false;
 
-  // Single-mode target screens (home by default). Unused in playlist mode.
   int _flags = kFlagSystem;
 
-  // Cached layout, updated each build; used to convert the transform to/from
-  // normalized (zoom, focus) values.
   double _bw = 0, _bh = 0, _cw = 0, _ch = 0;
 
   bool get _isPlaylist => widget.target != null;
@@ -77,8 +71,6 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
     super.dispose();
   }
 
-  /// Builds the transform that puts original point (fx,fy) at the crop-box center
-  /// at scale [zoom] (relative to cover). Child coords are the cover-sized box.
   Matrix4 _matrixFor(double zoom, double fx, double fy) {
     final tx = _bw / 2 - zoom * (fx * _cw);
     final ty = _bh / 2 - zoom * (fy * _ch);
@@ -87,12 +79,11 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
       ..scale(zoom);
   }
 
-  /// Reads the current (zoom, focusX, focusY) from the live transform.
   (double, double, double) _currentCrop() {
     final m = _transform.value;
     final zoom = m.getMaxScaleOnAxis();
     final t = m.getTranslation();
-    if (_cw <= 0 || _ch <= 0 || zoom == 0) return (1.0, 0.5, 0.5);
+    if (_cw <= 0 || _ch <= 0 || zoom == 0) return (0.0, 0.5, 0.5);
     final fx = (_bw / 2 - t.x) / (zoom * _cw);
     final fy = (_bh / 2 - t.y) / (zoom * _ch);
     return (zoom, fx, fy);
@@ -119,7 +110,6 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
         .showSnackBar(SnackBar(content: Text('操作失敗：$m')));
   }
 
-  // Playlist mode: save the crop file + transform only (no wallpaper change).
   Future<void> _saveCropOnly() async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -141,7 +131,6 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
     }
   }
 
-  // Playlist mode: save the crop AND set that side now.
   Future<void> _setNowPlaylist() async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -167,7 +156,6 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
     }
   }
 
-  // Single mode (from viewer): one-off set, no playlist write.
   Future<void> _setSingle() async {
     if (_busy) return;
     setState(() => _busy = true);
@@ -196,7 +184,6 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
     final mq = MediaQuery.of(context);
     final cropAspect = mq.size.width / mq.size.height;
     final screenWpx = (mq.size.width * mq.devicePixelRatio).round();
-    // Always the original image; capped to the screen width to bound memory.
     final provider = ResizeImage(
       AssetEntityImageProvider(widget.asset, isOriginal: true),
       width: screenWpx,
@@ -230,7 +217,6 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                         final ih = widget.asset.height.toDouble();
                         final imgAspect =
                             (iw > 0 && ih > 0) ? iw / ih : boxAspect;
-                        // Cover size of the ORIGINAL relative to the crop box.
                         double cw, ch;
                         if (imgAspect > boxAspect) {
                           ch = bh;
@@ -243,18 +229,17 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                         _bh = bh;
                         _cw = cw;
                         _ch = ch;
-                        // Scale (relative to cover) at which the whole original
-                        // fits inside the box — the minimum, so cut-off parts can
-                        // be recovered.
                         final fitScale = (bw / cw < bh / ch ? bw / cw : bh / ch);
                         final minScale = fitScale.clamp(0.05, 1.0);
-                        final maxScale = 6.0;
+                        const maxScale = 6.0;
 
                         if (!_applied) {
                           _applied = true;
-                          final z = widget.initialZoom
-                              .clamp(minScale, maxScale)
-                              .toDouble();
+                          final z = widget.initialZoom <= 0
+                              ? minScale
+                              : widget.initialZoom
+                                  .clamp(minScale, maxScale)
+                                  .toDouble();
                           WidgetsBinding.instance.addPostFrameCallback((_) {
                             _transform.value = _matrixFor(
                                 z, widget.initialFocusX, widget.initialFocusY);
@@ -293,7 +278,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Text(
-              '拖曳移動、雙指縮放（可縮小把被切掉的部分拿回來）；框內就是會被設成桌布的範圍。',
+              '預設把整張置中塞進畫面（多出來的邊留黑）。雘按放大可以切滿螢幕；框內就是桌布範圍。',
               style: TextStyle(color: Colors.white70, fontSize: 12),
               textAlign: TextAlign.center,
             ),
