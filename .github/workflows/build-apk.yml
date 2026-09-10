@@ -63,7 +63,7 @@ jobs:
             cp flutter_src/native/res/values/*.xml android/app/src/main/res/values/ 2>/dev/null || true
           fi
 
-      - name: Inject WorkManager dependency + proguard keep rules
+      - name: Inject WorkManager dependency
         run: |
           APP_GRADLE=$(ls android/app/build.gradle.kts android/app/build.gradle 2>/dev/null | head -1)
           cp flutter_src/native/proguard-rules.pro android/app/proguard-rules.pro
@@ -74,15 +74,8 @@ jobs:
           else
             printf '\ndependencies {\n    implementation "androidx.work:work-runtime-ktx:2.9.1"\n}\n' >> "$APP_GRADLE"
           fi
-          if grep -q 'WALLPAPER_PROGUARD' "$APP_GRADLE"; then
-            echo "proguard override already present"
-          elif [[ "$APP_GRADLE" == *.kts ]]; then
-            printf '\n// WALLPAPER_PROGUARD\nandroid {\n    buildTypes {\n        getByName("release") {\n            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")\n        }\n    }\n}\n' >> "$APP_GRADLE"
-          else
-            printf '\n// WALLPAPER_PROGUARD\nandroid {\n    buildTypes {\n        release {\n            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"\n        }\n    }\n}\n' >> "$APP_GRADLE"
-          fi
 
-      - name: Install Play upload keystore
+      - name: Install Play upload keystore and patch Gradle
         env:
           UPLOAD_KEYSTORE_BASE64: ${{ secrets.UPLOAD_KEYSTORE_BASE64 }}
           STORE_PASSWORD: ${{ secrets.UPLOAD_KEYSTORE_PASSWORD }}
@@ -96,14 +89,7 @@ jobs:
           echo "$UPLOAD_KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
           printf 'storePassword=%s\nkeyPassword=%s\nkeyAlias=%s\nstoreFile=upload-keystore.jks\n' \
             "$STORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > android/key.properties
-          APP_GRADLE=$(ls android/app/build.gradle.kts android/app/build.gradle 2>/dev/null | head -1)
-          if grep -q 'PLAY_UPLOAD_SIGNING' "$APP_GRADLE"; then
-            echo "signing override already present"
-          elif [[ "$APP_GRADLE" == *.kts ]]; then
-            cat flutter_src/native/play_signing.kts.append >> "$APP_GRADLE"
-          else
-            cat flutter_src/native/play_signing.gradle.append >> "$APP_GRADLE"
-          fi
+          python3 flutter_src/native/patch_play_signing.py
 
       - name: Build release APK and AAB
         run: |
