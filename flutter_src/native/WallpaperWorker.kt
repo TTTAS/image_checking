@@ -4,6 +4,8 @@ import android.app.WallpaperManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.Color
 import android.os.Build
 import android.util.DisplayMetrics
 import android.view.WindowManager
@@ -13,18 +15,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-/// Static wallpaper rotation (mode A).
-///
-/// [WallpaperStore] owns the on-disk state: it copies the chosen files into the
-/// app's private dir, writes a small JSON manifest, and knows how to set the
-/// "current" image and advance to the next one. [WallpaperWorker] is the
-/// WorkManager job that fires periodically (even when the app is dead) and just
-/// asks the store to advance.
-///
-/// This is deliberately all-native: the actual work (decode + WallpaperManager)
-/// is Android's, and keeping it here means the periodic job never needs to wake
-/// Flutter. GIF / animated WebP only show their first frame in this mode — real
-/// animation is the live wallpaper (mode B / M3).
 object WallpaperStore {
     private const val ROOT = "wallpaper_playlist"
     private const val MANIFEST = "wallpaper_rotation.json"
@@ -38,20 +28,18 @@ object WallpaperStore {
 
     private fun sanitize(s: String): String = s.replace(Regex("[^A-Za-z0-9_-]"), "_")
 
-    /// Saves already-cropped PNG bytes (from the Dart crop page) as a JPEG at
-    /// <side>/<id>.jpg. Returns the absolute path. ("儲存裁切" / "設為桌布")
     fun saveCropBytes(context: Context, bytes: ByteArray, side: String, id: String): String {
         val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             ?: throw IllegalStateException("無法解碼圖片")
         return saveJpeg(context, bmp, side, id)
     }
 
-    /// Center-crops an original file to the screen and saves it as <side>/<id>.jpg.
+    /// Fits the entire original inside the screen, centered, with black bars.
     /// Used at apply time for entries the user never cropped.
     fun centerCropSave(context: Context, srcPath: String, side: String, id: String): String {
         val (w, h) = screenSize(context)
         val src = decodeScaled(srcPath, w, h) ?: throw IllegalStateException("無法解碼圖片")
-        val out = centerCrop(src, w, h)
+        val out = fitCenter(src, w, h)
         return saveJpeg(context, out, side, id)
     }
 
@@ -61,11 +49,6 @@ object WallpaperStore {
         return f.absolutePath
     }
 
-    /// Live wallpaper (mode B): copies the ORIGINAL files (to keep animation)
-    /// into the app's private dir and writes wallpaper_live.json for
-    /// [PlaylistWallpaperService]. [items] entries carry srcPath / id / ext plus
-    /// the normalized crop transform (zoom / focusX / focusY) and animated flag.
-    /// Returns how many were copied.
     fun applyLive(
         context: Context,
         items: List<Map<String, Any?>>,
@@ -94,7 +77,7 @@ object WallpaperStore {
             }
             arr.put(JSONObject().apply {
                 put("path", dst.absolutePath)
-                put("zoom", (it["zoom"] as? Number)?.toDouble() ?: 1.0)
+                put("zoom", (it["zoom"] as? Number)?.toDouble() ?: 0.0)
                 put("focusX", (it["focusX"] as? Number)?.toDouble() ?: 0.5)
                 put("focusY", (it["focusY"] as? Number)?.toDouble() ?: 0.5)
                 put("animated", (it["animated"] as? Boolean) ?: false)
@@ -110,9 +93,6 @@ object WallpaperStore {
         return arr.length()
     }
 
-    /// Schedules rotation for both lists. [homePaths]/[lockPaths] are ordered
-    /// cropped-file paths; either may be empty (that side simply won't rotate).
-    /// Sets the first image of each side immediately.
     fun applyRotation(
         context: Context,
         homePaths: List<String>,
@@ -128,8 +108,8 @@ object WallpaperStore {
             put("lockPos", 0)
         }
         manifestFile(context).writeText(root.toString())
-        applyAt(context, root, "home", "homeOrder", 0, 1) // FLAG_SYSTEM
-        applyAt(context, root, "lock", "lockOrder", 0, 2) // FLAG_LOCK
+        applyAt(context, root, "home", "homeOrder", 0, 1)
+        applyAt(context, root, "lock", "lockOrder", 0, 2)
     }
 
     private fun order(n: Int, shuffle: Boolean): List<Int> {
@@ -138,7 +118,6 @@ object WallpaperStore {
         return l
     }
 
-    /// Advances both sides to their next image. Called by the periodic worker.
     fun advance(context: Context) {
         val root = readManifest(context) ?: return
         advanceSide(context, root, "home", "homeOrder", "homePos", 1)
@@ -187,23 +166,16 @@ object WallpaperStore {
         }
     }
 
-    /// Decodes a cropped file and sets it for [flags]. Cropped files are already
-    /// screen-ratio, so the center-crop here is a safe no-op.
     private fun applyFile(context: Context, path: String, flags: Int) {
         try {
             val (w, h) = screenSize(context)
             val bmp = decodeScaled(path, w, h) ?: return
-            val out = centerCrop(bmp, w, h)
+            val out = fitCenter(bmp, w, h)
             applyBitmap(context, out, flags)
         } catch (_: Exception) {
-            // A bad frame must never crash the worker or the app.
         }
     }
 
-    /// Sets [bmp] as the wallpaper for [flags] (1=home, 2=lock, 3=both).
-    /// Returns true if the per-screen flags were honored (Android N+); false on
-    /// older devices where only a single wallpaper can be set. Shared by the
-    /// rotation worker and the in-app crop page.
     fun applyBitmap(context: Context, bmp: Bitmap, flags: Int): Boolean {
         val wm = WallpaperManager.getInstance(context)
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
@@ -215,9 +187,6 @@ object WallpaperStore {
         }
     }
 
-    /// Sets an already-cropped PNG/JPEG (as bytes, sized by the caller to the
-    /// screen) as the wallpaper. Pure decode + setBitmap — never opens any system
-    /// UI. Returns whether per-screen [flags] were honored (Android N+).
     fun setWallpaperBytes(context: Context, bytes: ByteArray, flags: Int): Boolean {
         val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             ?: throw IllegalStateException("無法解碼圖片")
@@ -252,21 +221,21 @@ object WallpaperStore {
         return BitmapFactory.decodeFile(path, opts)
     }
 
-    private fun centerCrop(src: Bitmap, w: Int, h: Int): Bitmap {
-        val scale = maxOf(w.toFloat() / src.width, h.toFloat() / src.height)
+    /// Scale the whole image to fit inside [w]x[h], centered on black.
+    private fun fitCenter(src: Bitmap, w: Int, h: Int): Bitmap {
+        val scale = minOf(w.toFloat() / src.width, h.toFloat() / src.height)
         val sw = (src.width * scale).toInt().coerceAtLeast(1)
         val sh = (src.height * scale).toInt().coerceAtLeast(1)
         val scaled = Bitmap.createScaledBitmap(src, sw, sh, true)
-        val x = ((sw - w) / 2).coerceIn(0, maxOf(0, sw - 1))
-        val y = ((sh - h) / 2).coerceIn(0, maxOf(0, sh - 1))
-        val cw = minOf(w, sw - x)
-        val ch = minOf(h, sh - y)
-        return Bitmap.createBitmap(scaled, x, y, cw, ch)
+        if (sw == w && sh == h) return scaled
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        canvas.drawColor(Color.BLACK)
+        canvas.drawBitmap(scaled, (w - sw) / 2f, (h - sh) / 2f, null)
+        return out
     }
 }
 
-/// The periodic job WorkManager runs (~every 15+ minutes) to swap to the next
-/// image. Failures are swallowed so a single bad file never crashes the job.
 class WallpaperWorker(context: Context, params: WorkerParameters) :
     Worker(context, params) {
     override fun doWork(): Result {
