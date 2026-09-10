@@ -8,6 +8,7 @@ import 'library.dart';
 import 'photo_grid.dart';
 import 'selection.dart';
 import 'viewer.dart';
+import 'wallpaper_page.dart';
 
 /// Third tab: photos the user marked as favorite (newest first).
 class FavoritesTab extends StatefulWidget {
@@ -28,7 +29,6 @@ class _FavoritesTabState extends State<FavoritesTab> {
   void initState() {
     super.initState();
     widget.scrollToTop.addListener(_scrollToTop);
-    // Shares the same cached scan as the date tab; whichever loads first wins.
     _library.ensureLoaded();
   }
 
@@ -49,6 +49,12 @@ class _FavoritesTabState extends State<FavoritesTab> {
     );
   }
 
+  void _openPlaylist() {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const WallpaperPage(),
+    ));
+  }
+
   List<AssetEntity> get _visible {
     final list = _library.assets.value
         .where((a) =>
@@ -59,8 +65,6 @@ class _FavoritesTabState extends State<FavoritesTab> {
   }
 
   void _open(List<AssetEntity> assets, int index) {
-    // No reload on return: deletions update the shared library directly, and
-    // favorite/hidden changes come through their notifiers.
     Navigator.of(context).push(MaterialPageRoute(
       builder: (_) => ViewerPage(assets: assets, initialIndex: index),
     ));
@@ -79,7 +83,6 @@ class _FavoritesTabState extends State<FavoritesTab> {
       ]),
       builder: (context, _) {
         final visible = _visible;
-        // Only block the whole page while the very first scan has nothing yet.
         final loading =
             _library.loading.value && _library.assets.value.isEmpty;
         return Scaffold(
@@ -88,7 +91,16 @@ class _FavoritesTabState extends State<FavoritesTab> {
                   selection: _selection,
                   all: visible,
                 )
-              : AppBar(title: const Text('我的最愛')),
+              : AppBar(
+                  title: const Text('我的最愛'),
+                  actions: [
+                    IconButton(
+                      icon: const Icon(Icons.slideshow_outlined),
+                      tooltip: '輪播清單',
+                      onPressed: _openPlaylist,
+                    ),
+                  ],
+                ),
           body: loading
               ? const Center(child: CircularProgressIndicator())
               : RefreshIndicator(
