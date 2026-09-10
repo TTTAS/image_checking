@@ -1,4 +1,4 @@
-name: Build APK
+name: Build APK and AAB
 
 # 手動觸發，或每次 push 都自動 build
 on:
@@ -99,7 +99,7 @@ jobs:
           echo "----- $APP_GRADLE (tail) -----"
           tail -20 "$APP_GRADLE"
 
-      - name: Build release APK
+      - name: Build release APK and AAB
         run: |
           flutter pub get
           if [ -f assets/icon/logo.png ]; then
@@ -109,6 +109,7 @@ jobs:
             echo "沒有 assets/icon/logo.png，使用預設圖示"
           fi
           flutter build apk --release
+          flutter build appbundle --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -117,15 +118,26 @@ jobs:
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
 
-      # 把 APK 發到 Release，手機瀏覽器可直接點連結下載安裝（免登入、免解壓縮）。
-      # 固定網址：https://github.com/TTTAS/image_checking/releases/download/apk-latest/app-release.apk
-      - name: Publish APK to a Release
+      - name: Upload AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: photo_album_aab
+          path: build/app/outputs/bundle/release/app-release.aab
+          if-no-files-found: error
+
+      # 把 APK / AAB 發到 Release。
+      # APK：https://github.com/TTTAS/image_checking/releases/download/apk-latest/app-release.apk
+      # AAB：https://github.com/TTTAS/image_checking/releases/download/apk-latest/app-release.aab
+      - name: Publish APK and AAB to a Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-latest
-          name: 最新 APK（自動建置）
+          name: 最新建置（APK + AAB）
           body: |
             由分支 `${{ github.ref_name }}` 的 commit `${{ github.sha }}` 自動建置。
-            手機直接點下面的 `app-release.apk` 即可下載安裝。
-          files: build/app/outputs/flutter-apk/app-release.apk
+            - 手機直接安裝：下 `app-release.apk`
+            - 上傳 Google Play：下 `app-release.aab`
+          files: |
+            build/app/outputs/flutter-apk/app-release.apk
+            build/app/outputs/bundle/release/app-release.aab
           prerelease: true
