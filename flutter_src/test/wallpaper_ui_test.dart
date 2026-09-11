@@ -41,7 +41,10 @@ void main() {
     expect(find.byTooltip('輪播設定'), findsOneWidget);
     // A missing/unreadable file must show an error and disable Apply.
     expect(find.textContaining('無法播放影片'), findsOneWidget);
-    final apply = tester.widget<FilledButton>(find.widgetWithText(FilledButton, '設為桌布'));
+    final apply = tester.widget<FilledButton>(find.ancestor(
+      of: find.text('設為桌布'),
+      matching: find.byWidgetPredicate((widget) => widget is FilledButton),
+    ));
     expect(apply.onPressed, isNull);
   });
 
