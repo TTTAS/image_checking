@@ -2,6 +2,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:video_player/video_player.dart';
 import 'package:flutter/rendering.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -9,6 +10,7 @@ import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 
 import 'native_wallpaper.dart';
 import 'wallpaper_playlist.dart';
+import 'wallpaper_page.dart';
 
 /// In-app wallpaper crop + preview (no system cropper, no external app).
 ///
@@ -43,7 +45,8 @@ class WallpaperCropPage extends StatefulWidget {
   State<WallpaperCropPage> createState() => _WallpaperCropPageState();
 }
 
-class _WallpaperCropPageState extends State<WallpaperCropPage> {
+class _WallpaperCropPageState extends State<WallpaperCropPage>
+    with WidgetsBindingObserver {
   final GlobalKey _cropKey = GlobalKey();
   final TransformationController _transform = TransformationController();
 
@@ -53,6 +56,57 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
   int _flags = kFlagSystem;
 
   double _bw = 0, _bh = 0, _cw = 0, _ch = 0;
+
+  VideoPlayerController? _video;
+  String? _videoError;
+  bool get _isVideo => widget.asset.type == AssetType.video;
+  bool get _videoReady => _video?.value.isInitialized ?? false;
+  bool get _canSave => !_busy && (!_isVideo || _videoReady);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    if (_isVideo) _loadVideo();
+  }
+
+  Future<void> _loadVideo() async {
+    try {
+      final file = await widget.asset.originFile ?? await widget.asset.file;
+      if (!mounted) return;
+      if (file == null) throw StateError('影片已移除或無法讀取');
+      final controller = VideoPlayerController.file(file);
+      _video = controller;
+      await controller.initialize();
+      if (!mounted) return;
+      await controller.setVolume(0);
+      await controller.setLooping(true);
+      if (!mounted) return;
+      await controller.play();
+      if (mounted) setState(() {});
+    } catch (e) {
+      if (mounted) setState(() => _videoError = '無法播放影片：$e');
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (!_videoReady) return;
+    if (state == AppLifecycleState.resumed) {
+      _video?.play();
+    } else {
+      _video?.pause();
+    }
+  }
+
+  Future<void> _openPlaylist() async {
+    await _video?.pause();
+    if (!mounted) return;
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => const WallpaperPage(),
+    ));
+    if (mounted && _videoReady) await _video?.play();
+  }
 
   bool get _isPlaylist => widget.target != null;
 
@@ -67,6 +121,8 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _video?.dispose();
     _transform.dispose();
     super.dispose();
   }
@@ -118,13 +174,15 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
     final navigator = Navigator.of(context);
     try {
       final (z, fx, fy) = _currentCrop();
-      final bytes = await _captureBytes();
-      final path = await NativeWallpaper.saveCrop(bytes, t.key, widget.asset.id);
+      final path = _isVideo ? '' : await NativeWallpaper.saveCrop(
+          await _captureBytes(), t.key, widget.asset.id);
       await WallpaperPlaylist.setCropped(t, widget.asset.id, path,
-          zoom: z, focusX: fx, focusY: fy);
+          zoom: z, focusX: fx, focusY: fy,
+          sourceWidth: _video?.value.size.width.round(),
+          sourceHeight: _video?.value.size.height.round());
       if (!mounted) return;
       messenger.showSnackBar(
-          const SnackBar(content: Text('已儲存裁切（不會立刻換桌布，下次輪播會用它）')));
+          const SnackBar(content: Text('已儲存裁切，請回清單按「套用輪播」更新桌布')));
       navigator.pop();
     } catch (e) {
       _fail(e);
@@ -132,6 +190,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
   }
 
   Future<void> _setNowPlaylist() async {
+    if (_isVideo) return _setVideoWallpaper(saveCrop: true);
     if (_busy) return;
     setState(() => _busy = true);
     final t = widget.target!;
@@ -157,6 +216,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
   }
 
   Future<void> _setSingle() async {
+    if (_isVideo) return _setVideoWallpaper(saveCrop: false);
     if (_busy) return;
     setState(() => _busy = true);
     final messenger = ScaffoldMessenger.of(context);
@@ -179,6 +239,45 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
     }
   }
 
+  Future<void> _setVideoWallpaper({required bool saveCrop}) async {
+    if (!_canSave) return;
+    setState(() => _busy = true);
+    try {
+      final (z, fx, fy) = _currentCrop();
+      final size = _video!.value.size;
+      if (saveCrop) {
+        await WallpaperPlaylist.setCropped(
+          WallpaperTarget.home, widget.asset.id, '',
+          zoom: z, focusX: fx, focusY: fy,
+          sourceWidth: size.width.round(), sourceHeight: size.height.round(),
+        );
+      }
+      final file = await widget.asset.originFile ?? await widget.asset.file;
+      if (file == null) throw StateError('影片已移除或無法讀取');
+      await NativeWallpaper.applyLive(
+        items: [{
+          'id': widget.asset.id, 'srcPath': file.path,
+          'ext': file.path.split('.').last.toLowerCase(),
+          'type': 'video', 'mime': widget.asset.mimeType ?? '',
+          'zoom': z, 'focusX': fx, 'focusY': fy, 'animated': false,
+          'width': size.width.round(), 'height': size.height.round(),
+        }],
+        liveSeconds: WallpaperPlaylist.settings.value.liveSeconds,
+        loops: WallpaperPlaylist.settings.value.loopsBeforeNext,
+        shuffle: false,
+      );
+      await _video?.pause();
+      await NativeWallpaper.openLiveWallpaperPreview();
+      if (!mounted) return;
+      setState(() => _busy = false);
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('請在系統預覽確認「設定桌布」，影片會依裁切範圍靜音循環播放'),
+      ));
+    } catch (e) {
+      _fail(e);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
@@ -194,6 +293,12 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
+        actions: [
+          IconButton(tooltip: '輪播清單', icon: const Icon(Icons.slideshow),
+              onPressed: _busy ? null : _openPlaylist),
+          IconButton(tooltip: '輪播設定', icon: const Icon(Icons.tune),
+              onPressed: _busy ? null : () => showWallpaperSettings(context)),
+        ],
         title: Text(
           _isPlaylist ? '裁切（${widget.target!.label}）' : '裁切桌布',
           style: const TextStyle(fontSize: 16),
@@ -210,11 +315,18 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                   child: ClipRect(
                     child: LayoutBuilder(
                       builder: (context, constraints) {
+                        if (_isVideo && !_videoReady) {
+                          return Center(child: _videoError == null
+                              ? const CircularProgressIndicator()
+                              : Padding(padding: const EdgeInsets.all(16),
+                                  child: Text(_videoError!,
+                                    style: const TextStyle(color: Colors.white))));
+                        }
                         final bw = constraints.maxWidth;
                         final bh = constraints.maxHeight;
                         final boxAspect = bw / bh;
-                        final iw = widget.asset.width.toDouble();
-                        final ih = widget.asset.height.toDouble();
+                        final iw = _isVideo ? _video!.value.size.width : widget.asset.width.toDouble();
+                        final ih = _isVideo ? _video!.value.size.height : widget.asset.height.toDouble();
                         final imgAspect =
                             (iw > 0 && ih > 0) ? iw / ih : boxAspect;
                         double cw, ch;
@@ -241,6 +353,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                                   .clamp(minScale, maxScale)
                                   .toDouble();
                           WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (!mounted) return;
                             _transform.value = _matrixFor(
                                 z, widget.initialFocusX, widget.initialFocusY);
                           });
@@ -256,7 +369,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                           child: SizedBox(
                             width: cw,
                             height: ch,
-                            child: Image(
+                            child: _isVideo ? VideoPlayer(_video!) : Image(
                               image: provider,
                               fit: BoxFit.cover,
                               gaplessPlayback: true,
@@ -278,7 +391,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Text(
-              '預設把整張置中塞進畫面（多出來的邊留黑）。雘按放大可以切滿螢幕；框內就是桌布範圍。',
+              '預設把整張置中塞進畫面（多出來的邊留黑）。雙指放大可以切滿螢幕；框內就是桌布範圍。',
               style: TextStyle(color: Colors.white70, fontSize: 12),
               textAlign: TextAlign.center,
             ),
@@ -287,7 +400,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
             const Padding(
               padding: EdgeInsets.only(bottom: 4),
               child: Text(
-                '動態圖片只會擷取單一靜態畫面（會動要等 M3）。',
+                '主畫面輪播保留動畫；單張設定與鎖定桌布使用靜態畫面。',
                 style: TextStyle(color: Colors.white54, fontSize: 11),
                 textAlign: TextAlign.center,
               ),
@@ -309,7 +422,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
             mainAxisSize: MainAxisSize.min,
             children: [
               const Text(
-                '「儲存裁切」只更新這張的裁切、不會立刻換桌布；「設為桌布」會存並立刻套用這一邊。',
+                '「儲存裁切」後請回清單套用輪播；「設為桌布」會套用目前這一項。',
                 style: TextStyle(color: Colors.white60, fontSize: 11),
                 textAlign: TextAlign.center,
               ),
@@ -318,7 +431,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                 children: [
                   Expanded(
                     child: OutlinedButton(
-                      onPressed: _busy ? null : _saveCropOnly,
+                      onPressed: _canSave ? _saveCropOnly : null,
                       style: OutlinedButton.styleFrom(
                           foregroundColor: Colors.white),
                       child: const Text('儲存裁切'),
@@ -335,7 +448,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                             )
                           : const Icon(Icons.wallpaper),
                       label: Text(_busy ? '處理中…' : '設為桌布'),
-                      onPressed: _busy ? null : _setNowPlaylist,
+                      onPressed: _canSave ? _setNowPlaylist : null,
                     ),
                   ),
                 ],
@@ -358,13 +471,13 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              const Text(
-                '主畫面＝解鎖後的桌面；鎖定＝沒解鎖時的畫面；兩者＝同一張寫入兩邊。此處只設定一次，不影響輪播清單。',
+              Text(
+                _isVideo ? '影片依裁切範圍靜音循環播放，不更動輪播清單。鎖定輪播僅支援圖片；套用時需在系統預覽確認。' : '主畫面＝解鎖後的桌面；鎖定＝沒解鎖時的畫面；兩者＝同一張寫入兩邊。此處只設定一次，不影響輪播清單。',
                 style: TextStyle(color: Colors.white60, fontSize: 11),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
-              SegmentedButton<int>(
+              if (!_isVideo) SegmentedButton<int>(
                 segments: const [
                   ButtonSegment(value: kFlagSystem, label: Text('主畫面')),
                   ButtonSegment(value: kFlagLock, label: Text('鎖定')),
@@ -387,7 +500,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                             )
                           : const Icon(Icons.wallpaper),
                       label: Text(_busy ? '設定中…' : '設為桌布'),
-                      onPressed: _busy ? null : _setSingle,
+                      onPressed: _canSave ? _setSingle : null,
                     ),
                   ),
                   const SizedBox(width: 8),

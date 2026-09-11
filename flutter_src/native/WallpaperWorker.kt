@@ -49,6 +49,7 @@ object WallpaperStore {
         return f.absolutePath
     }
 
+    @Synchronized
     fun applyLive(
         context: Context,
         items: List<Map<String, Any?>>,
@@ -73,7 +74,10 @@ object WallpaperStore {
                 if (e.isNullOrEmpty()) "img" else e
             }).lowercase().replace(Regex("[^a-z0-9]"), "").ifEmpty { "img" }
             val from = File(src)
-            if (!from.exists()) continue
+            if (!from.isFile || from.length() == 0L) {
+                staging.deleteRecursively()
+                throw IllegalStateException("桌布素材遺失或為空，已保留原桌布")
+            }
             val name = "${index}_${sanitize(id)}.$ext"
             val stagedFile = File(staging, name)
             try {
@@ -81,17 +85,18 @@ object WallpaperStore {
                     stagedFile.outputStream().use { output -> input.copyTo(output) }
                 }
                 if (stagedFile.length() != from.length()) {
-                    stagedFile.delete()
-                    continue
+                    throw IllegalStateException("桌布素材複製不完整")
                 }
-            } catch (_: Exception) {
-                stagedFile.delete()
-                continue
+            } catch (e: Exception) {
+                staging.deleteRecursively()
+                throw IllegalStateException("複製桌布素材失敗，已保留原桌布", e)
             }
             arr.put(JSONObject().apply {
                 put("path", File(active, name).absolutePath)
                 put("type", (it["type"] as? String) ?: "still")
                 put("mime", (it["mime"] as? String) ?: "")
+                put("width", (it["width"] as? Number)?.toInt() ?: 0)
+                put("height", (it["height"] as? Number)?.toInt() ?: 0)
                 put("zoom", (it["zoom"] as? Number)?.toDouble() ?: 0.0)
                 put("focusX", (it["focusX"] as? Number)?.toDouble() ?: 0.5)
                 put("focusY", (it["focusY"] as? Number)?.toDouble() ?: 0.5)

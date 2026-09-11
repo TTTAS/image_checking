@@ -40,6 +40,9 @@ class WallpaperItem {
     this.cropZoom = 0.0,
     this.cropFocusX = 0.5,
     this.cropFocusY = 0.5,
+    this.cropConfigured = false,
+    this.sourceWidth = 0,
+    this.sourceHeight = 0,
   });
 
   final String id;
@@ -50,8 +53,11 @@ class WallpaperItem {
   double cropZoom;
   double cropFocusX;
   double cropFocusY;
+  bool cropConfigured;
+  int sourceWidth;
+  int sourceHeight;
 
-  bool get cropped => filePath.isNotEmpty;
+  bool get cropped => cropConfigured || filePath.isNotEmpty;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -62,6 +68,9 @@ class WallpaperItem {
         'cropZoom': cropZoom,
         'cropFocusX': cropFocusX,
         'cropFocusY': cropFocusY,
+        'cropConfigured': cropConfigured,
+        'sourceWidth': sourceWidth,
+        'sourceHeight': sourceHeight,
       };
 
   static WallpaperItem fromJson(Map<String, dynamic> j) => WallpaperItem(
@@ -74,6 +83,9 @@ class WallpaperItem {
         cropZoom: (j['cropZoom'] as num?)?.toDouble() ?? 0.0,
         cropFocusX: (j['cropFocusX'] as num?)?.toDouble() ?? 0.5,
         cropFocusY: (j['cropFocusY'] as num?)?.toDouble() ?? 0.5,
+        cropConfigured: (j['cropConfigured'] as bool?) ?? false,
+        sourceWidth: (j['sourceWidth'] as int?) ?? 0,
+        sourceHeight: (j['sourceHeight'] as int?) ?? 0,
       );
 }
 
@@ -292,6 +304,8 @@ class WallpaperPlaylist {
     double? zoom,
     double? focusX,
     double? focusY,
+    int? sourceWidth,
+    int? sourceHeight,
   }) async {
     final list = listFor(t);
     final next = List<WallpaperItem>.from(list.value);
@@ -301,6 +315,9 @@ class WallpaperPlaylist {
     if (zoom != null) next[i].cropZoom = zoom;
     if (focusX != null) next[i].cropFocusX = focusX;
     if (focusY != null) next[i].cropFocusY = focusY;
+    next[i].cropConfigured = true;
+    if (sourceWidth != null) next[i].sourceWidth = sourceWidth;
+    if (sourceHeight != null) next[i].sourceHeight = sourceHeight;
     list.value = next;
     await _persist();
   }

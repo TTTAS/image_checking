@@ -177,6 +177,14 @@ class _ViewerPageState extends State<ViewerPage> {
             tooltip: '桌布',
             onSelected: (v) {
               switch (v) {
+                case 'settings':
+                  showWallpaperSettings(context);
+                  break;
+                case 'playlist':
+                  Navigator.of(context).push(MaterialPageRoute<void>(
+                    builder: (_) => const WallpaperPage(),
+                  ));
+                  break;
                 case 'single':
                   Navigator.of(context).push(MaterialPageRoute<void>(
                     builder: (_) => WallpaperCropPage(asset: _current),
@@ -194,21 +202,25 @@ class _ViewerPageState extends State<ViewerPage> {
                   break;
               }
             },
-            itemBuilder: (context) => _current.type == AssetType.video
-                ? const [
-                    PopupMenuItem(
-                        value: 'home', child: Text('加入主畫面輪播')),
-                  ]
-                : const [
-                    PopupMenuItem(
-                        value: 'single', child: Text('設為桌布（單張）')),
-                    PopupMenuItem(
-                        value: 'home', child: Text('加入主畫面輪播')),
-                    PopupMenuItem(
-                        value: 'lock', child: Text('加入鎖定輪播')),
-                    PopupMenuItem(
-                        value: 'both', child: Text('兩邊都加入輪播')),
-                  ],
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'single', child: Text('設為桌布')),
+              const PopupMenuItem(value: 'home', child: Text('加入主畫面輪播')),
+              PopupMenuItem(
+                value: 'lock',
+                enabled: _current.type != AssetType.video,
+                child: Text(_current.type == AssetType.video
+                    ? '加入鎖定輪播（僅支援圖片）' : '加入鎖定輪播'),
+              ),
+              PopupMenuItem(
+                value: 'both',
+                enabled: _current.type != AssetType.video,
+                child: Text(_current.type == AssetType.video
+                    ? '兩邊都加入輪播（僅支援圖片）' : '兩邊都加入輪播'),
+              ),
+              const PopupMenuDivider(),
+              const PopupMenuItem(value: 'playlist', child: Text('輪播清單')),
+              const PopupMenuItem(value: 'settings', child: Text('輪播設定')),
+            ],
           ),
           IconButton(
             icon: const Icon(Icons.info_outline),

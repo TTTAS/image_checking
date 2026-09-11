@@ -74,7 +74,7 @@ class NativeWallpaper {
   /// Live wallpaper (mode B): copies the given ORIGINAL files into the app's
   /// private dir and writes the live manifest. [items] is an ordered list of
   /// `{'srcPath','id','ext','type','mime','zoom','focusX','focusY','animated'}`
-  /// maps. Video items are played muted and center-cropped by Android.
+  /// maps, with optional width/height. All items honor their saved crop.
   /// Does NOT set the wallpaper — call [openLiveWallpaperPreview] after.
   /// Throws [PlatformException] on failure.
   static Future<void> applyLive({

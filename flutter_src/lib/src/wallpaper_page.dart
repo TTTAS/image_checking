@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
-import 'package:video_player/video_player.dart';
 
 import 'native_wallpaper.dart';
 import 'wallpaper_crop_page.dart';
@@ -32,12 +31,7 @@ class _WallpaperPageState extends State<WallpaperPage> {
       messenger.showSnackBar(const SnackBar(content: Text('找不到原始素材')));
       return;
     }
-    if (item.video) {
-      navigator.push(MaterialPageRoute<void>(
-        builder: (_) => _VideoWallpaperPreviewPage(asset: asset),
-      ));
-      return;
-    }
+    if (!mounted) return;
     navigator.push(MaterialPageRoute<void>(
       builder: (_) => WallpaperCropPage(
         asset: asset,
@@ -152,6 +146,8 @@ class _WallpaperPageState extends State<WallpaperPage> {
           'type':
               it.video ? 'video' : (_looksAnimated(it) ? 'animated' : 'still'),
           'mime': it.mime,
+          'width': it.sourceWidth,
+          'height': it.sourceHeight,
         });
       } catch (_) {}
     }
@@ -279,7 +275,7 @@ class _WallpaperPageState extends State<WallpaperPage> {
             padding: EdgeInsets.fromLTRB(12, 10, 12, 0),
             child: Text(
               '套用主畫面會開系統「動態桌布」預覽（看起來像只編第一張，按設定即可，不是本 App 裁切頁）。'
-              '主畫面可混合圖片、動圖與影片；影片固定靜音並置中填滿。'
+              '主畫面可混合圖片、動圖與影片；點選素材可預覽、縮放及拖曳裁切。影片固定靜音。'
               '換張間隔用下面的秒數。鎖定清單仍是靜態，最短約 15 分鐘。',
               style: TextStyle(fontSize: 12),
               textAlign: TextAlign.center,
@@ -339,112 +335,10 @@ class _WallpaperPageState extends State<WallpaperPage> {
   }
 
   void _openSettings() {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (_) => const _SettingsSheet(),
-    );
+    showWallpaperSettings(context);
   }
 }
 
-class _VideoWallpaperPreviewPage extends StatefulWidget {
-  const _VideoWallpaperPreviewPage({required this.asset});
-
-  final AssetEntity asset;
-
-  @override
-  State<_VideoWallpaperPreviewPage> createState() =>
-      _VideoWallpaperPreviewPageState();
-}
-
-class _VideoWallpaperPreviewPageState
-    extends State<_VideoWallpaperPreviewPage> {
-  VideoPlayerController? _controller;
-  late final Future<void> _ready;
-
-  @override
-  void initState() {
-    super.initState();
-    _ready = _prepare();
-  }
-
-  Future<void> _prepare() async {
-    var file = await widget.asset.originFile;
-    file ??= await widget.asset.file;
-    if (file == null) throw StateError('找不到影片檔');
-    final controller = VideoPlayerController.file(file);
-    _controller = controller;
-    await controller.initialize();
-    await controller.setLooping(true);
-    await controller.setVolume(0);
-    await controller.play();
-  }
-
-  @override
-  void dispose() {
-    _controller?.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        title: const Text('影片桌布預覽'),
-        backgroundColor: Colors.black,
-        foregroundColor: Colors.white,
-      ),
-      body: Stack(
-        fit: StackFit.expand,
-        children: [
-          FutureBuilder<void>(
-            future: _ready,
-            builder: (context, snapshot) {
-              final controller = _controller;
-              if (snapshot.hasError) {
-                return const Center(
-                  child: Text('無法播放這部影片',
-                      style: TextStyle(color: Colors.white)),
-                );
-              }
-              if (snapshot.connectionState != ConnectionState.done ||
-                  controller == null) {
-                return const Center(child: CircularProgressIndicator());
-              }
-              final size = controller.value.size;
-              return SizedBox.expand(
-                child: FittedBox(
-                  fit: BoxFit.cover,
-                  clipBehavior: Clip.hardEdge,
-                  child: SizedBox(
-                    width: size.width,
-                    height: size.height,
-                    child: VideoPlayer(controller),
-                  ),
-                ),
-              );
-            },
-          ),
-          const Align(
-            alignment: Alignment.bottomCenter,
-            child: SafeArea(
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: Text(
-                  '實際桌布會循環、靜音並置中填滿螢幕',
-                  style: TextStyle(color: Colors.white),
-                  textAlign: TextAlign.center,
-                ),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _EmptyState extends StatelessWidget {
   const _EmptyState({required this.target});
@@ -529,7 +423,7 @@ class _PlaylistTile extends StatelessWidget {
                 final minutes = duration.inMinutes;
                 final seconds = duration.inSeconds.remainder(60);
                 final time = '$minutes:${seconds.toString().padLeft(2, '0')}';
-                return Text('影片・$time・置中填滿',
+                return Text('影片・$time・${item.cropped ? '已裁切' : '完整置中'}',
                     style: const TextStyle(fontSize: 12));
               },
             )
@@ -544,8 +438,8 @@ class _PlaylistTile extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            icon: Icon(item.video ? Icons.play_circle_outline : Icons.crop),
-            tooltip: item.video ? '預覽影片' : '預覽／裁切',
+            icon: const Icon(Icons.crop),
+            tooltip: '預覽／裁切',
             visualDensity: VisualDensity.compact,
             onPressed: onOpen,
           ),
@@ -645,6 +539,15 @@ class _ActionBar extends StatelessWidget {
   }
 }
 
+void showWallpaperSettings(BuildContext context) {
+  showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    isScrollControlled: true,
+    builder: (_) => const _SettingsSheet(),
+  );
+}
+
 class _SettingsSheet extends StatefulWidget {
   const _SettingsSheet();
 
@@ -671,7 +574,8 @@ class _SettingsSheetState extends State<_SettingsSheet> {
   @override
   Widget build(BuildContext context) {
     return SafeArea(
-      child: Padding(
+      child: SingleChildScrollView(
+        child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -682,6 +586,21 @@ class _SettingsSheetState extends State<_SettingsSheet> {
               child: Text('輪播設定',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
             ),
+            const Text('主畫面每項播放時間（圖片、GIF、影片皆適用）'),
+            Wrap(
+              spacing: 8,
+              children: [
+                for (final sec in [10, 15, 30, 60, 120])
+                  ChoiceChip(
+                    label: Text('$sec 秒'),
+                    selected: _s.liveSeconds == sec,
+                    onSelected: (_) => setState(
+                        () => _s = _s.copyWith(liveSeconds: sec)),
+                  ),
+              ],
+            ),
+            const Text('短影片循環播放，時間到切換下一項；修改後請重新套用。'),
+            const SizedBox(height: 12),
             const Text('鎖定畫面靜態輪播間隔（最短約 15 分鐘）',
                 style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
             const SizedBox(height: 6),
@@ -713,6 +632,7 @@ class _SettingsSheetState extends State<_SettingsSheet> {
             ),
           ],
         ),
+      ),
       ),
     );
   }

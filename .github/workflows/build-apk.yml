@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - master
+      - feat/video-wallpaper-playlist
 
 jobs:
   build:
@@ -91,6 +92,7 @@ jobs:
       - name: Build release APK and AAB
         run: |
           flutter pub get
+          flutter analyze --no-fatal-infos --no-fatal-warnings lib/src/wallpaper*.dart lib/src/viewer.dart lib/src/native_wallpaper.dart
           if [ -f assets/icon/logo.png ]; then
             dart run flutter_launcher_icons
           fi
