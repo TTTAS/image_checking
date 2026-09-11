@@ -19,6 +19,7 @@ class WallpaperPage extends StatefulWidget {
 class _WallpaperPageState extends State<WallpaperPage> {
   final Map<String, Future<AssetEntity?>> _assetCache = {};
   late WallpaperTarget _tab = widget.initialTarget;
+  bool _applying = false;
 
   Future<AssetEntity?> _asset(String id) =>
       _assetCache[id] ??= AssetEntity.fromId(id);
@@ -71,6 +72,7 @@ class _WallpaperPageState extends State<WallpaperPage> {
   }
 
   Future<void> _apply() async {
+    if (_applying) return;
     final home = WallpaperPlaylist.homeItems.value;
     final lock = WallpaperPlaylist.lockItems.value;
     if (home.isEmpty && lock.isEmpty) {
@@ -78,11 +80,16 @@ class _WallpaperPageState extends State<WallpaperPage> {
           const SnackBar(content: Text('兩個清單都是空的，先加入素材')));
       return;
     }
-    if (home.isNotEmpty) {
-      await _applyLive();
-      if (lock.isNotEmpty) await _applyLockOnly();
-    } else {
-      await _applyStatic();
+    setState(() => _applying = true);
+    try {
+      if (home.isNotEmpty) {
+        final applied = await _applyLive();
+        if (applied && lock.isNotEmpty) await _applyLockOnly();
+      } else {
+        await _applyStatic();
+      }
+    } finally {
+      if (mounted) setState(() => _applying = false);
     }
   }
 
@@ -117,14 +124,14 @@ class _WallpaperPageState extends State<WallpaperPage> {
     return 'img';
   }
 
-  Future<void> _applyLive() async {
+  Future<bool> _applyLive() async {
     final messenger = ScaffoldMessenger.of(context);
     final s = WallpaperPlaylist.settings.value;
     final home = WallpaperPlaylist.homeItems.value;
     if (home.isEmpty) {
       messenger.showSnackBar(
           const SnackBar(content: Text('主畫面清單是空的')));
-      return;
+      return false;
     }
     messenger.showSnackBar(const SnackBar(content: Text('準備中…')));
     final items = <Map<String, dynamic>>[];
@@ -151,10 +158,10 @@ class _WallpaperPageState extends State<WallpaperPage> {
         });
       } catch (_) {}
     }
-    if (items.isEmpty) {
+    if (items.length != home.length) {
       messenger.showSnackBar(
-          const SnackBar(content: Text('找不到可用的素材檔')));
-      return;
+          const SnackBar(content: Text('部分素材無法讀取，未套用。請移除遺失項目後重試。')));
+      return false;
     }
     try {
       final secs = s.liveSeconds <= 0 ? 30 : s.liveSeconds;
@@ -165,13 +172,15 @@ class _WallpaperPageState extends State<WallpaperPage> {
         shuffle: s.shuffle,
       );
       await NativeWallpaper.openLiveWallpaperPreview();
-      if (!mounted) return;
+      if (!mounted) return true;
       messenger.showSnackBar(SnackBar(
         content: Text('請在系統預覽按「設定」。設好後主畫面每 $secs 秒換下一張。'),
       ));
+      return true;
     } on PlatformException catch (e) {
       messenger.showSnackBar(
           SnackBar(content: Text('套用失敗：${e.message ?? e.code}')));
+      return false;
     }
   }
 
@@ -303,7 +312,7 @@ class _WallpaperPageState extends State<WallpaperPage> {
           Expanded(child: _list(_tab)),
           const Divider(height: 1),
           const _IntervalBar(),
-          _ActionBar(onApply: _apply, onStop: _stop),
+          _ActionBar(onApply: _applying ? null : _apply, onStop: _stop),
         ],
       ),
     );
@@ -509,7 +518,7 @@ class _IntervalBar extends StatelessWidget {
 
 class _ActionBar extends StatelessWidget {
   const _ActionBar({required this.onApply, required this.onStop});
-  final VoidCallback onApply;
+  final VoidCallback? onApply;
   final VoidCallback onStop;
 
   @override

@@ -178,4 +178,40 @@ class PlaybackTest {
         launch()
         solid("13-preserved-after-failed-apply", Color.RED)
     }
+
+    @Test fun closingSystemPreviewDoesNotKillInstalledWallpaper() {
+        manifest(item("quadrants.mp4", 2.0, .25, .25))
+        launch()
+        solid("14-main-before-preview", Color.RED)
+        main { activity.addPreview() }
+        val deadline = System.currentTimeMillis() + 15000
+        var frames = 0
+        while (frames < 5 && System.currentTimeMillis() < deadline) {
+            main { frames = activity.preview?.renderedFrames ?: 0 }
+            Thread.sleep(100)
+        }
+        assertTrue("Second engine must present frames", frames >= 5)
+        main { activity.closePreview() }
+        var before = 0
+        main { before = activity.playback.renderedFrames }
+        Thread.sleep(700)
+        main { assertTrue(activity.playback.renderedFrames > before + 2) }
+        solid("15-main-after-preview-closed", Color.RED)
+    }
+
+    @Test fun rotatedVideoUsesDisplayOrientation() {
+        manifest(item("rotated.mp4"), seconds = 30)
+        launch()
+        awaitPixels("16-rotated-video") { b ->
+            val scale = minOf(b.width / 240f, b.height / 320f)
+            val dx = (60 * scale).toInt()
+            val dy = (80 * scale).toInt()
+            val x = b.width / 2
+            val y = b.height / 2
+            matches(b.getPixel(x-dx,y-dy), Color.GREEN) &&
+                matches(b.getPixel(x+dx,y-dy), Color.YELLOW) &&
+                matches(b.getPixel(x-dx,y+dy), Color.RED) &&
+                matches(b.getPixel(x+dx,y+dy), Color.BLUE)
+        }.recycle()
+    }
 }

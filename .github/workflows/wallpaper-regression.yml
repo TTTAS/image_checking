@@ -2,7 +2,7 @@ name: Wallpaper runtime regression
 on:
   workflow_dispatch:
   push:
-    branches: [main, master, feat/video-wallpaper-playlist]
+    branches: [main, master]
     paths: ['flutter_src/**', 'tests/wallpaper/**', '.github/workflows/wallpaper-regression.yml']
   pull_request:
     paths: ['flutter_src/**', 'tests/wallpaper/**', '.github/workflows/wallpaper-regression.yml']

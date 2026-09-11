@@ -5,6 +5,7 @@ import android.graphics.*
 import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.Drawable
 import android.media.MediaPlayer
+import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -151,6 +152,20 @@ class WallpaperPlayback(private val context: Context) {
         var firstFrame = false
         var videoWidth = item.width
         var videoHeight = item.height
+        if (videoWidth <= 0 || videoHeight <= 0) {
+            val metadata = MediaMetadataRetriever()
+            try {
+                metadata.setDataSource(item.path)
+                videoWidth = metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+                videoHeight = metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+                val rotation = metadata.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+                if (rotation == 90 || rotation == 270) {
+                    val oldWidth = videoWidth
+                    videoWidth = videoHeight
+                    videoHeight = oldWidth
+                }
+            } finally { metadata.release() }
+        }
         val timeout = Runnable { fail(token, IllegalStateException("影片未能在 10 秒內開始播放")) }
         val surface = renderer!!.createVideoSurface(handler) {
             if (token == generation && visible && player === p) {
@@ -213,6 +228,17 @@ class WallpaperPlayback(private val context: Context) {
         paint.textSize = width / 34f
         canvas.drawText("請返回相簿檢查素材後重新套用", width / 2f, height / 2f + width / 14f, paint)
         try { renderer?.drawBitmap(b) } finally { b.recycle() }
+        val token = generation
+        fun checkForUpdate() {
+            handler.postDelayed({
+                if (visible && token == generation) {
+                    val before = manifestText
+                    loadManifest()
+                    if (before != manifestText) playCurrent() else checkForUpdate()
+                }
+            }, 1000)
+        }
+        checkForUpdate()
     }
 
     @Suppress("DEPRECATION")

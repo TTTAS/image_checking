@@ -4,16 +4,21 @@ import android.app.Activity
 import android.os.Bundle
 import android.view.SurfaceHolder
 import android.view.SurfaceView
+import android.widget.LinearLayout
 
 class SurfaceActivity : Activity(), SurfaceHolder.Callback {
     lateinit var view: SurfaceView
     lateinit var playback: WallpaperPlayback
+    var preview: WallpaperPlayback? = null
+    private lateinit var layout: LinearLayout
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
         playback = WallpaperPlayback(this)
         view = SurfaceView(this)
         view.holder.addCallback(this)
-        setContentView(view)
+        layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        layout.addView(view, LinearLayout.LayoutParams(-1, 0, 1f))
+        setContentView(layout)
     }
     override fun surfaceCreated(holder: SurfaceHolder) {}
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
@@ -21,5 +26,24 @@ class SurfaceActivity : Activity(), SurfaceHolder.Callback {
         playback.setVisible(true)
     }
     override fun surfaceDestroyed(holder: SurfaceHolder) { playback.detach() }
-    override fun onDestroy() { playback.detach(); super.onDestroy() }
+    fun addPreview() {
+        val second = SurfaceView(this)
+        val engine = WallpaperPlayback(this)
+        preview = engine
+        second.holder.addCallback(object : SurfaceHolder.Callback {
+            override fun surfaceCreated(h: SurfaceHolder) {}
+            override fun surfaceChanged(h: SurfaceHolder, f: Int, w: Int, height: Int) {
+                engine.attach(h.surface, w, height)
+                engine.setVisible(true)
+            }
+            override fun surfaceDestroyed(h: SurfaceHolder) { engine.detach() }
+        })
+        layout.addView(second, LinearLayout.LayoutParams(-1, 0, 1f))
+    }
+    fun closePreview() {
+        preview?.detach()
+        preview = null
+        layout.removeViewAt(1)
+    }
+    override fun onDestroy() { preview?.detach(); playback.detach(); super.onDestroy() }
 }

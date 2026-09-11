@@ -19,7 +19,20 @@ import java.nio.ByteOrder
  * All methods run on the owning playback thread; each engine has its own context.
  */
 class WallpaperRenderer(surface: Surface, private val width: Int, private val height: Int) {
-    private val display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+    companion object {
+        // Preview and installed wallpaper engines can coexist in this process.
+        // eglTerminate invalidates the shared display, so only the last engine may call it.
+        private var displayUsers = 0
+        private fun acquireDisplay(): android.opengl.EGLDisplay {
+            val d = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+            if (displayUsers == 0)
+                check(EGL14.eglInitialize(d, IntArray(2), 0, IntArray(2), 0))
+            displayUsers++
+            return d
+        }
+    }
+    private val display = acquireDisplay()
+    private var released = false
     private var context = EGL14.EGL_NO_CONTEXT
     private var window = EGL14.EGL_NO_SURFACE
     private var bitmapProgram = 0
@@ -37,7 +50,6 @@ class WallpaperRenderer(surface: Surface, private val width: Int, private val he
 
     init {
         try {
-            check(EGL14.eglInitialize(display, IntArray(2), 0, IntArray(2), 0))
             val configs = arrayOfNulls<EGLConfig>(1)
             val count = IntArray(1)
             check(EGL14.eglChooseConfig(display, intArrayOf(
@@ -148,6 +160,8 @@ class WallpaperRenderer(surface: Surface, private val width: Int, private val he
     }
 
     fun release() {
+        if (released) return
+        released = true
         if (context != EGL14.EGL_NO_CONTEXT && window != EGL14.EGL_NO_SURFACE) {
             releaseVideo()
             current()
@@ -160,7 +174,7 @@ class WallpaperRenderer(surface: Surface, private val width: Int, private val he
         if (context != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(display, context)
         window = EGL14.EGL_NO_SURFACE
         context = EGL14.EGL_NO_CONTEXT
-        EGL14.eglTerminate(display)
+        if (--displayUsers == 0) EGL14.eglTerminate(display)
     }
 
     private fun texture(target: Int): Int {
