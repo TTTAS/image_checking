@@ -6,6 +6,7 @@ on:
     branches:
       - main
       - master
+      - feat/video-wallpaper-playlist
 
 jobs:
   build:
