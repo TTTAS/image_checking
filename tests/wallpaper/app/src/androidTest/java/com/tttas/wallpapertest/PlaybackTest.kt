@@ -216,4 +216,12 @@ class PlaybackTest {
                 matches(b.getPixel(x+dx,y+dy), Color.BLUE)
         }.recycle()
     }
+
+    @Test fun gifFramesActuallyAdvance() {
+        manifest(item("motion.gif"), seconds = 30)
+        launch()
+        solid("18-gif-first-frame", Color.MAGENTA)
+        solid("19-gif-next-frame", Color.YELLOW)
+        solid("20-gif-looped-frame", Color.MAGENTA)
+    }
 }

@@ -1,6 +1,7 @@
 """Copy the production playback code; fixtures are generated, no personal media."""
 from pathlib import Path
 import subprocess
+import json
 
 repo = Path(__file__).resolve().parents[2]
 app = Path(__file__).resolve().parent / "app"
@@ -18,6 +19,13 @@ filtergraph = ("color=red:s=320x240:r=15:d=2,"
 def ff(*args):
     subprocess.run(["ffmpeg", "-y", "-loglevel", "error", *args], check=True)
 ff("-f", "lavfi", "-i", filtergraph, "-c:v", "libx264", "-pix_fmt", "yuv420p", str(assets / "quadrants.mp4"))
-ff("-i", str(assets / "quadrants.mp4"), "-c", "copy", "-metadata:s:v:0", "rotate=90", str(assets / "rotated.mp4"))
-ff("-f", "lavfi", "-i", "color=magenta:s=160x120:r=5:d=1", str(assets / "motion.gif"))
+ff("-display_rotation", "90", "-i", str(assets / "quadrants.mp4"), "-c", "copy", str(assets / "rotated.mp4"))
+probe = json.loads(subprocess.check_output([
+    "ffprobe", "-v", "error", "-show_streams", "-of", "json", str(assets / "rotated.mp4")
+]))
+assert any(abs(side.get("rotation", 0)) == 90
+           for stream in probe["streams"] for side in stream.get("side_data_list", [])), "Rotation fixture has no display matrix"
+ff("-f", "lavfi", "-i", "color=magenta:s=160x120:r=10:d=2",
+   "-vf", "drawbox=x=0:y=0:w=iw:h=ih:color=yellow:t=fill:enable='gte(t,1)'",
+   str(assets / "motion.gif"))
 ff("-f", "lavfi", "-i", "color=cyan:s=160x120:r=5:d=1", "-c:v", "libvpx-vp9", str(assets / "sample.webm"))
