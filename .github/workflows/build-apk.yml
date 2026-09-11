@@ -1,4 +1,4 @@
-name: Build APK and AAB
+name: Build APK (manual)
 
 on:
   workflow_dispatch:
@@ -7,7 +7,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -84,7 +84,7 @@ jobs:
             "$STORE_PASSWORD" "$KEY_PASSWORD" "$KEY_ALIAS" > android/key.properties
           python3 flutter_src/native/patch_play_signing.py
 
-      - name: Build release APK and AAB
+      - name: Build release APK
         run: |
           flutter pub get
           flutter analyze --no-fatal-infos --no-fatal-warnings lib/src/wallpaper*.dart lib/src/viewer.dart lib/src/native_wallpaper.dart
@@ -93,7 +93,6 @@ jobs:
             dart run flutter_launcher_icons
           fi
           flutter build apk --release
-          flutter build appbundle --release
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
@@ -101,21 +100,3 @@ jobs:
           name: photo_album_apk
           path: build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
-
-      - name: Upload AAB
-        uses: actions/upload-artifact@v4
-        with:
-          name: photo_album_aab
-          path: build/app/outputs/bundle/release/app-release.aab
-          if-no-files-found: error
-
-      - name: Publish APK and AAB to a Release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: apk-latest
-          name: Latest build (APK + AAB)
-          files: |
-            build/app/outputs/flutter-apk/app-release.apk
-            build/app/outputs/bundle/release/app-release.aab
-          prerelease: true
