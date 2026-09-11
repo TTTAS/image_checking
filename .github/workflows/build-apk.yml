@@ -2,11 +2,6 @@ name: Build APK and AAB
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - master
-      - feat/video-wallpaper-playlist
 
 jobs:
   build:
