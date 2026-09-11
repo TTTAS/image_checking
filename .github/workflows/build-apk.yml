@@ -93,6 +93,7 @@ jobs:
         run: |
           flutter pub get
           flutter analyze --no-fatal-infos --no-fatal-warnings lib/src/wallpaper*.dart lib/src/viewer.dart lib/src/native_wallpaper.dart
+          flutter test flutter_src/test/wallpaper_ui_test.dart
           if [ -f assets/icon/logo.png ]; then
             dart run flutter_launcher_icons
           fi
