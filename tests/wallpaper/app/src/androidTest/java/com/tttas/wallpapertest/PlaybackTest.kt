@@ -93,7 +93,7 @@ class PlaybackTest {
     }
 
     private fun evidence(name: String, b: Bitmap) {
-        val dir = File(context.getExternalFilesDir(null), "evidence").apply { mkdirs() }
+        val dir = File(context.filesDir, "evidence").apply { mkdirs() }
         File(dir, "$name.png").outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 

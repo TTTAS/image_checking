@@ -7,6 +7,7 @@ adb install -r tests/wallpaper/app/build/outputs/apk/androidTest/debug/app-debug
 adb shell am instrument -w -r com.tttas.wallpapertest.test/androidx.test.runner.AndroidJUnitRunner > tests/wallpaper/instrumentation.txt
 cat tests/wallpaper/instrumentation.txt
 adb logcat -d -s PlaylistWP > tests/wallpaper/playback.log
-adb pull /sdcard/Android/data/com.tttas.wallpapertest/files/evidence tests/wallpaper/evidence
+adb exec-out run-as com.tttas.wallpapertest tar -C files -cf - evidence > tests/wallpaper/evidence.tar
+tar -xf tests/wallpaper/evidence.tar -C tests/wallpaper
 # am instrument can exit zero even when JUnit fails, so require its success line.
 grep -Eq 'OK \([1-9][0-9]* tests?\)' tests/wallpaper/instrumentation.txt
