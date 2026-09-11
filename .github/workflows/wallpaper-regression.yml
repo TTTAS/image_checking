@@ -40,10 +40,7 @@ jobs:
           api-level: 30
           arch: x86_64
           disable-animations: true
-          script: |
-            gradle -p tests/wallpaper connectedDebugAndroidTest
-            adb logcat -d -s PlaylistWP > tests/wallpaper/playback.log
-            adb pull /sdcard/Android/data/com.tttas.wallpapertest/files/evidence tests/wallpaper/evidence
+          script: bash tests/wallpaper/run_emulator_tests.sh
       - name: Upload pixel evidence and test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -54,3 +51,4 @@ jobs:
             tests/wallpaper/app/build/outputs/androidTest-results
             tests/wallpaper/evidence
             tests/wallpaper/playback.log
+            tests/wallpaper/instrumentation.txt

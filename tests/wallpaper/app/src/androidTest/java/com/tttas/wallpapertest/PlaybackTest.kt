@@ -160,6 +160,8 @@ class PlaybackTest {
                     if (Color.red(b.getPixel(x,y)) > 160) bright++
             matches(b.getPixel(0,0), Color.rgb(28,28,32)) && bright > 20
         }.recycle()
+        manifest(item("still.png"))
+        solid("17-reapply-recovers-from-error", Color.WHITE)
     }
 
     @Test fun failedApplyPreservesPreviouslyAppliedPlaylist() {

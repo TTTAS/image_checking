@@ -4,20 +4,20 @@ import android.app.Activity
 import android.os.Bundle
 import android.view.SurfaceHolder
 import android.view.SurfaceView
-import android.widget.LinearLayout
+import android.widget.FrameLayout
 
 class SurfaceActivity : Activity(), SurfaceHolder.Callback {
     lateinit var view: SurfaceView
     lateinit var playback: WallpaperPlayback
     var preview: WallpaperPlayback? = null
-    private lateinit var layout: LinearLayout
+    private lateinit var layout: FrameLayout
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
         playback = WallpaperPlayback(this)
         view = SurfaceView(this)
         view.holder.addCallback(this)
-        layout = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        layout.addView(view, LinearLayout.LayoutParams(-1, 0, 1f))
+        layout = FrameLayout(this)
+        layout.addView(view, FrameLayout.LayoutParams(-1, -1))
         setContentView(layout)
     }
     override fun surfaceCreated(holder: SurfaceHolder) {}
@@ -38,7 +38,8 @@ class SurfaceActivity : Activity(), SurfaceHolder.Callback {
             }
             override fun surfaceDestroyed(h: SurfaceHolder) { engine.detach() }
         })
-        layout.addView(second, LinearLayout.LayoutParams(-1, 0, 1f))
+        // Overlay a second Surface without resizing/recreating the first one.
+        layout.addView(second, FrameLayout.LayoutParams(160, 160))
     }
     fun closePreview() {
         preview?.detach()
