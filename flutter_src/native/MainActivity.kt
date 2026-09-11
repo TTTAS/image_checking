@@ -318,7 +318,7 @@ class MainActivity : FlutterActivity() {
             try {
                 val n = WallpaperStore.applyLive(applicationContext, items, seconds, loops, shuffle)
                 if (n == 0) {
-                    runOnUiThread { result.error("EMPTY", "沒有可用的動態圖片", null) }
+                    runOnUiThread { result.error("EMPTY", "沒有可用的桌布素材", null) }
                 } else {
                     runOnUiThread { result.success(n) }
                 }

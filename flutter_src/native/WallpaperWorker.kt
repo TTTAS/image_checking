@@ -56,27 +56,42 @@ object WallpaperStore {
         loops: Int,
         shuffle: Boolean,
     ): Int {
-        val dir = File(context.filesDir, "wallpaper_live/home")
-            .apply { if (!exists()) mkdirs() }
-        dir.listFiles()?.forEach { it.delete() }
+        val base = File(context.filesDir, "wallpaper_live").apply {
+            if (!exists() && !mkdirs()) throw IllegalStateException("無法建立桌布資料夾")
+        }
+        val active = File(base, "home")
+        val staging = File(base, "staging")
+        val previous = File(base, "previous")
+        staging.deleteRecursively()
+        if (!staging.mkdirs()) throw IllegalStateException("無法建立桌布暫存資料夾")
 
         val arr = JSONArray()
-        for (it in items) {
+        for ((index, it) in items.withIndex()) {
             val src = it["srcPath"] as? String ?: continue
             val id = it["id"] as? String ?: continue
-            val ext = (it["ext"] as? String).let { e -> if (e.isNullOrEmpty()) "img" else e }
+            val ext = ((it["ext"] as? String).let { e ->
+                if (e.isNullOrEmpty()) "img" else e
+            }).lowercase().replace(Regex("[^a-z0-9]"), "").ifEmpty { "img" }
             val from = File(src)
             if (!from.exists()) continue
-            val dst = File(dir, "${sanitize(id)}.$ext")
+            val name = "${index}_${sanitize(id)}.$ext"
+            val stagedFile = File(staging, name)
             try {
                 from.inputStream().use { input ->
-                    dst.outputStream().use { output -> input.copyTo(output) }
+                    stagedFile.outputStream().use { output -> input.copyTo(output) }
+                }
+                if (stagedFile.length() != from.length()) {
+                    stagedFile.delete()
+                    continue
                 }
             } catch (_: Exception) {
+                stagedFile.delete()
                 continue
             }
             arr.put(JSONObject().apply {
-                put("path", dst.absolutePath)
+                put("path", File(active, name).absolutePath)
+                put("type", (it["type"] as? String) ?: "still")
+                put("mime", (it["mime"] as? String) ?: "")
                 put("zoom", (it["zoom"] as? Number)?.toDouble() ?: 0.0)
                 put("focusX", (it["focusX"] as? Number)?.toDouble() ?: 0.5)
                 put("focusY", (it["focusY"] as? Number)?.toDouble() ?: 0.5)
@@ -89,7 +104,35 @@ object WallpaperStore {
             put("loops", loops)
             put("shuffle", shuffle)
         }
-        File(context.filesDir, "wallpaper_live.json").writeText(root.toString())
+        if (arr.length() == 0) {
+            staging.deleteRecursively()
+            return 0
+        }
+
+        val manifest = File(context.filesDir, "wallpaper_live.json")
+        val oldManifest = try {
+            if (manifest.exists()) manifest.readText() else null
+        } catch (_: Exception) {
+            null
+        }
+        previous.deleteRecursively()
+        if (active.exists() && !active.renameTo(previous)) {
+            staging.deleteRecursively()
+            throw IllegalStateException("無法備份目前桌布")
+        }
+        if (!staging.renameTo(active)) {
+            previous.renameTo(active)
+            throw IllegalStateException("無法啟用新的桌布素材")
+        }
+        try {
+            manifest.writeText(root.toString())
+        } catch (e: Exception) {
+            active.deleteRecursively()
+            previous.renameTo(active)
+            if (oldManifest != null) manifest.writeText(oldManifest) else manifest.delete()
+            throw e
+        }
+        previous.deleteRecursively()
         return arr.length()
     }
 

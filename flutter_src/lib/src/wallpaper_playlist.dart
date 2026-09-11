@@ -23,11 +23,19 @@ const Set<String> kWallpaperMimes = {
   'image/gif',
 };
 
+const Set<String> kWallpaperVideoMimes = {
+  'video/mp4',
+  'video/webm',
+  'video/3gpp',
+  'video/quicktime',
+};
+
 class WallpaperItem {
   WallpaperItem({
     required this.id,
     required this.mime,
     required this.animated,
+    required this.video,
     this.filePath = '',
     this.cropZoom = 0.0,
     this.cropFocusX = 0.5,
@@ -38,6 +46,7 @@ class WallpaperItem {
   String filePath;
   final String mime;
   bool animated;
+  final bool video;
   double cropZoom;
   double cropFocusX;
   double cropFocusY;
@@ -49,6 +58,7 @@ class WallpaperItem {
         'filePath': filePath,
         'mime': mime,
         'animated': animated,
+        'video': video,
         'cropZoom': cropZoom,
         'cropFocusX': cropFocusX,
         'cropFocusY': cropFocusY,
@@ -59,6 +69,8 @@ class WallpaperItem {
         filePath: (j['filePath'] as String?) ?? '',
         mime: (j['mime'] as String?) ?? '',
         animated: (j['animated'] as bool?) ?? false,
+        video: (j['video'] as bool?) ??
+            ((j['mime'] as String?) ?? '').toLowerCase().startsWith('video/'),
         cropZoom: (j['cropZoom'] as num?)?.toDouble() ?? 0.0,
         cropFocusX: (j['cropFocusX'] as num?)?.toDouble() ?? 0.5,
         cropFocusY: (j['cropFocusY'] as num?)?.toDouble() ?? 0.5,
@@ -179,21 +191,29 @@ class WallpaperPlaylist {
     await p.setString(_settingsKey, jsonEncode(settings.value.toJson()));
   }
 
-  static bool accepts(AssetEntity asset) {
-    if (asset.type != AssetType.image) return false;
-    return kWallpaperMimes.contains(_mimeOf(asset));
+  static bool accepts(AssetEntity asset, WallpaperTarget target) {
+    final mime = _mimeOf(asset);
+    if (asset.type == AssetType.image) return kWallpaperMimes.contains(mime);
+    return target == WallpaperTarget.home &&
+        asset.type == AssetType.video &&
+        kWallpaperVideoMimes.contains(mime);
   }
 
   static bool contains(WallpaperTarget t, String id) =>
       listFor(t).value.any((e) => e.id == id);
 
   static Future<bool> add(AssetEntity asset, WallpaperTarget t) async {
-    if (!accepts(asset) || contains(t, asset.id)) return false;
+    if (!accepts(asset, t) || contains(t, asset.id)) return false;
     final mime = _mimeOf(asset);
     final list = listFor(t);
     list.value = [
       ...list.value,
-      WallpaperItem(id: asset.id, mime: mime, animated: _looksAnimated(mime)),
+      WallpaperItem(
+        id: asset.id,
+        mime: mime,
+        animated: _looksAnimated(mime),
+        video: asset.type == AssetType.video,
+      ),
     ];
     await _persist();
     return true;
@@ -206,9 +226,14 @@ class WallpaperPlaylist {
     final have = next.map((e) => e.id).toSet();
     var added = 0;
     for (final a in assets) {
-      if (!accepts(a) || have.contains(a.id)) continue;
+      if (!accepts(a, t) || have.contains(a.id)) continue;
       final mime = _mimeOf(a);
-      next.add(WallpaperItem(id: a.id, mime: mime, animated: _looksAnimated(mime)));
+      next.add(WallpaperItem(
+        id: a.id,
+        mime: mime,
+        animated: _looksAnimated(mime),
+        video: a.type == AssetType.video,
+      ));
       have.add(a.id);
       added++;
     }
@@ -293,6 +318,10 @@ class WallpaperPlaylist {
     if (name.endsWith('.webp')) return 'image/webp';
     if (name.endsWith('.png')) return 'image/png';
     if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg';
+    if (name.endsWith('.mp4') || name.endsWith('.m4v')) return 'video/mp4';
+    if (name.endsWith('.webm')) return 'video/webm';
+    if (name.endsWith('.3gp')) return 'video/3gpp';
+    if (name.endsWith('.mov')) return 'video/quicktime';
     return '';
   }
 

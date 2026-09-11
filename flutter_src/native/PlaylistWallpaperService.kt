@@ -8,6 +8,7 @@ import android.graphics.Movie
 import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.Drawable
 import android.graphics.ImageDecoder
+import android.media.MediaPlayer
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -18,9 +19,10 @@ import android.view.SurfaceHolder
 import org.json.JSONObject
 import java.io.File
 
-/// Live wallpaper: plays the HOME playlist (GIF / animated WebP / stills).
-/// Visible-only 16ms draw loop. GIFs use Movie.setTime; WebP uses ImageDecoder
-/// SOFTWARE bitmaps. Returning to home restarts the current item from frame 0.
+/// Live wallpaper: plays the HOME playlist (video / GIF / animated WebP / stills).
+/// Videos decode directly to the wallpaper Surface. Only animated images use
+/// the 16ms Canvas loop; stills draw once. Returning home restarts the current
+/// item from frame 0.
 class PlaylistWallpaperService : WallpaperService() {
     private data class Item(
         val path: String,
@@ -28,6 +30,8 @@ class PlaylistWallpaperService : WallpaperService() {
         val fx: Float,
         val fy: Float,
         val animated: Boolean,
+        val type: String,
+        val mime: String,
     )
 
     override fun onCreateEngine(): Engine = PlaylistEngine()
@@ -39,8 +43,8 @@ class PlaylistWallpaperService : WallpaperService() {
         private val items = mutableListOf<Item>()
         private var order = mutableListOf<Int>()
         private var seconds = 30
-        private var loops = 1
         private var pos = 0
+        private var manifestModified = -1L
 
         private var visible = false
         private var surfaceW = 0
@@ -49,7 +53,9 @@ class PlaylistWallpaperService : WallpaperService() {
         private var drawable: Drawable? = null
         private var movie: Movie? = null
         private var still: Bitmap? = null
+        private var player: MediaPlayer? = null
         private var movieStart = 0L
+        private var generation = 0
 
         private var drawScale = 1f
         private var drawLeft = 0f
@@ -79,6 +85,7 @@ class PlaylistWallpaperService : WallpaperService() {
         override fun onVisibilityChanged(v: Boolean) {
             visible = v
             if (v) {
+                reloadManifestIfChanged()
                 playCurrent(0)
             } else {
                 stopAll()
@@ -96,32 +103,38 @@ class PlaylistWallpaperService : WallpaperService() {
         }
 
         private fun loadManifest() {
-            items.clear()
             try {
                 val f = File(filesDir, "wallpaper_live.json")
                 if (!f.exists()) {
                     Log.w(tag, "no wallpaper_live.json")
+                    items.clear()
+                    manifestModified = -1L
                     return
                 }
                 val root = JSONObject(f.readText())
-                seconds = root.optInt("seconds", 30)
-                loops = root.optInt("loops", 1).coerceAtLeast(1)
+                val loaded = mutableListOf<Item>()
                 val arr = root.optJSONArray("items") ?: return
                 for (i in 0 until arr.length()) {
                     val o = arr.getJSONObject(i)
-                    items.add(
+                    loaded.add(
                         Item(
                             path = o.optString("path", ""),
                             zoom = o.optDouble("zoom", 0.0).toFloat(),
                             fx = o.optDouble("focusX", 0.5).toFloat(),
                             fy = o.optDouble("focusY", 0.5).toFloat(),
                             animated = o.optBoolean("animated", false),
+                            type = o.optString("type", ""),
+                            mime = o.optString("mime", ""),
                         )
                     )
                 }
+                items.clear()
+                items.addAll(loaded)
+                seconds = root.optInt("seconds", 30)
                 order = (0 until items.size).toMutableList()
                 if (root.optBoolean("shuffle", false)) order.shuffle()
                 pos = 0
+                manifestModified = f.lastModified()
                 Log.i(tag, "loaded ${items.size} items seconds=$seconds")
             } catch (e: Exception) {
                 Log.e(tag, "loadManifest", e)
@@ -129,8 +142,22 @@ class PlaylistWallpaperService : WallpaperService() {
             }
         }
 
+        private fun reloadManifestIfChanged() {
+            val f = File(filesDir, "wallpaper_live.json")
+            if (!f.exists() || f.lastModified() != manifestModified) loadManifest()
+        }
+
         private fun stopAll() {
+            generation++
             handler.removeCallbacksAndMessages(null)
+            player?.let {
+                try {
+                    it.setSurface(null)
+                    it.release()
+                } catch (_: Exception) {
+                }
+            }
+            player = null
             (drawable as? AnimatedImageDrawable)?.let {
                 try {
                     it.stop()
@@ -140,6 +167,7 @@ class PlaylistWallpaperService : WallpaperService() {
             drawable?.callback = null
             drawable = null
             movie = null
+            still?.recycle()
             still = null
         }
 
@@ -164,6 +192,11 @@ class PlaylistWallpaperService : WallpaperService() {
                 playCurrent(attempt + 1)
                 return
             }
+            val token = generation
+            if (looksVideo(item, file)) {
+                playVideo(file, token, attempt)
+                return
+            }
             try {
                 val wantAnim = item.animated || looksAnimated(file)
                 if (wantAnim && tryPlayGifMovie(file, item)) {
@@ -181,9 +214,79 @@ class PlaylistWallpaperService : WallpaperService() {
                 playCurrent(attempt + 1)
                 return
             }
+            scheduleAdvance()
+            if (movie != null || drawable != null) {
+                handler.post(tick)
+            } else {
+                drawFrame()
+            }
+        }
+
+        private fun scheduleAdvance() {
             val delayMs = (if (seconds > 0) seconds else 8) * 1000L
             handler.postDelayed({ advance() }, delayMs)
-            handler.post(tick)
+        }
+
+        private fun looksVideo(item: Item, file: File): Boolean {
+            if (item.type.equals("video", ignoreCase = true)) return true
+            if (item.mime.startsWith("video/", ignoreCase = true)) return true
+            return when (file.extension.lowercase()) {
+                "mp4", "m4v", "webm", "3gp", "mov" -> true
+                else -> false
+            }
+        }
+
+        private fun playVideo(file: File, token: Int, attempt: Int) {
+            clearBlack()
+            try {
+                val p = MediaPlayer()
+                player = p
+                p.setDataSource(file.absolutePath)
+                p.setSurface(surfaceHolder.surface)
+                p.setVolume(0f, 0f)
+                p.isLooping = true
+                p.setScreenOnWhilePlaying(false)
+                p.setOnPreparedListener { ready ->
+                    if (token != generation || !visible || player !== ready) {
+                        try {
+                            ready.release()
+                        } catch (_: Exception) {
+                        }
+                        return@setOnPreparedListener
+                    }
+                    try {
+                        ready.setVideoScalingMode(
+                            MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
+                        )
+                        ready.start()
+                        scheduleAdvance()
+                        Log.i(tag, "video ${file.name} ${ready.videoWidth}x${ready.videoHeight}")
+                    } catch (e: Exception) {
+                        Log.e(tag, "start video ${file.name}", e)
+                        skipFailedVideo(ready, token, attempt)
+                    }
+                }
+                p.setOnErrorListener { failed, what, extra ->
+                    Log.e(tag, "video error ${file.name} what=$what extra=$extra")
+                    skipFailedVideo(failed, token, attempt)
+                    true
+                }
+                p.prepareAsync()
+            } catch (e: Exception) {
+                Log.e(tag, "prepare video ${file.name}", e)
+                skipFailedVideo(player, token, attempt)
+            }
+        }
+
+        private fun skipFailedVideo(failed: MediaPlayer?, token: Int, attempt: Int) {
+            if (token != generation) return
+            if (player === failed) player = null
+            try {
+                failed?.release()
+            } catch (_: Exception) {
+            }
+            pos = (pos + 1) % order.size.coerceAtLeast(1)
+            playCurrent(attempt + 1)
         }
 
         private fun looksAnimated(file: File): Boolean {

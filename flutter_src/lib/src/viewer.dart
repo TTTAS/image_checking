@@ -172,36 +172,44 @@ class _ViewerPageState extends State<ViewerPage> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
-          if (_current.type != AssetType.video)
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.wallpaper),
-              tooltip: '桌布',
-              onSelected: (v) {
-                switch (v) {
-                  case 'single':
-                    Navigator.of(context).push(MaterialPageRoute<void>(
-                      builder: (_) => WallpaperCropPage(asset: _current),
-                    ));
-                    break;
-                  case 'home':
-                    _addToPlaylist([WallpaperTarget.home]);
-                    break;
-                  case 'lock':
-                    _addToPlaylist([WallpaperTarget.lock]);
-                    break;
-                  case 'both':
-                    _addToPlaylist(
-                        [WallpaperTarget.home, WallpaperTarget.lock]);
-                    break;
-                }
-              },
-              itemBuilder: (context) => const [
-                PopupMenuItem(value: 'single', child: Text('設為桌布（單張）')),
-                PopupMenuItem(value: 'home', child: Text('加入主畫面輪播')),
-                PopupMenuItem(value: 'lock', child: Text('加入鎖定輪播')),
-                PopupMenuItem(value: 'both', child: Text('兩邊都加入輪播')),
-              ],
-            ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.wallpaper),
+            tooltip: '桌布',
+            onSelected: (v) {
+              switch (v) {
+                case 'single':
+                  Navigator.of(context).push(MaterialPageRoute<void>(
+                    builder: (_) => WallpaperCropPage(asset: _current),
+                  ));
+                  break;
+                case 'home':
+                  _addToPlaylist([WallpaperTarget.home]);
+                  break;
+                case 'lock':
+                  _addToPlaylist([WallpaperTarget.lock]);
+                  break;
+                case 'both':
+                  _addToPlaylist(
+                      [WallpaperTarget.home, WallpaperTarget.lock]);
+                  break;
+              }
+            },
+            itemBuilder: (context) => _current.type == AssetType.video
+                ? const [
+                    PopupMenuItem(
+                        value: 'home', child: Text('加入主畫面輪播')),
+                  ]
+                : const [
+                    PopupMenuItem(
+                        value: 'single', child: Text('設為桌布（單張）')),
+                    PopupMenuItem(
+                        value: 'home', child: Text('加入主畫面輪播')),
+                    PopupMenuItem(
+                        value: 'lock', child: Text('加入鎖定輪播')),
+                    PopupMenuItem(
+                        value: 'both', child: Text('兩邊都加入輪播')),
+                  ],
+          ),
           IconButton(
             icon: const Icon(Icons.info_outline),
             tooltip: '詳細資訊',

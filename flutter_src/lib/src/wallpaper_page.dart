@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
+import 'package:video_player/video_player.dart';
 
 import 'native_wallpaper.dart';
 import 'wallpaper_crop_page.dart';
@@ -28,7 +29,13 @@ class _WallpaperPageState extends State<WallpaperPage> {
     final messenger = ScaffoldMessenger.of(context);
     final asset = await _asset(item.id);
     if (asset == null) {
-      messenger.showSnackBar(const SnackBar(content: Text('找不到原始圖片')));
+      messenger.showSnackBar(const SnackBar(content: Text('找不到原始素材')));
+      return;
+    }
+    if (item.video) {
+      navigator.push(MaterialPageRoute<void>(
+        builder: (_) => _VideoWallpaperPreviewPage(asset: asset),
+      ));
       return;
     }
     navigator.push(MaterialPageRoute<void>(
@@ -46,6 +53,7 @@ class _WallpaperPageState extends State<WallpaperPage> {
       List<WallpaperItem> items, WallpaperTarget t) async {
     final paths = <String>[];
     for (final it in items) {
+      if (it.video) continue;
       if (it.filePath.isNotEmpty) {
         paths.add(it.filePath);
         continue;
@@ -73,7 +81,7 @@ class _WallpaperPageState extends State<WallpaperPage> {
     final lock = WallpaperPlaylist.lockItems.value;
     if (home.isEmpty && lock.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('兩個清單都是空的，先加入圖片')));
+          const SnackBar(content: Text('兩個清單都是空的，先加入素材')));
       return;
     }
     if (home.isNotEmpty) {
@@ -141,12 +149,15 @@ class _WallpaperPageState extends State<WallpaperPage> {
           'focusX': it.cropFocusX,
           'focusY': it.cropFocusY,
           'animated': _looksAnimated(it),
+          'type':
+              it.video ? 'video' : (_looksAnimated(it) ? 'animated' : 'still'),
+          'mime': it.mime,
         });
       } catch (_) {}
     }
     if (items.isEmpty) {
       messenger.showSnackBar(
-          const SnackBar(content: Text('找不到可用的圖片檔')));
+          const SnackBar(content: Text('找不到可用的素材檔')));
       return;
     }
     try {
@@ -268,6 +279,7 @@ class _WallpaperPageState extends State<WallpaperPage> {
             padding: EdgeInsets.fromLTRB(12, 10, 12, 0),
             child: Text(
               '套用主畫面會開系統「動態桌布」預覽（看起來像只編第一張，按設定即可，不是本 App 裁切頁）。'
+              '主畫面可混合圖片、動圖與影片；影片固定靜音並置中填滿。'
               '換張間隔用下面的秒數。鎖定清單仍是靜態，最短約 15 分鐘。',
               style: TextStyle(fontSize: 12),
               textAlign: TextAlign.center,
@@ -336,6 +348,104 @@ class _WallpaperPageState extends State<WallpaperPage> {
   }
 }
 
+class _VideoWallpaperPreviewPage extends StatefulWidget {
+  const _VideoWallpaperPreviewPage({required this.asset});
+
+  final AssetEntity asset;
+
+  @override
+  State<_VideoWallpaperPreviewPage> createState() =>
+      _VideoWallpaperPreviewPageState();
+}
+
+class _VideoWallpaperPreviewPageState
+    extends State<_VideoWallpaperPreviewPage> {
+  VideoPlayerController? _controller;
+  late final Future<void> _ready;
+
+  @override
+  void initState() {
+    super.initState();
+    _ready = _prepare();
+  }
+
+  Future<void> _prepare() async {
+    var file = await widget.asset.originFile;
+    file ??= await widget.asset.file;
+    if (file == null) throw StateError('找不到影片檔');
+    final controller = VideoPlayerController.file(file);
+    _controller = controller;
+    await controller.initialize();
+    await controller.setLooping(true);
+    await controller.setVolume(0);
+    await controller.play();
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        title: const Text('影片桌布預覽'),
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+      ),
+      body: Stack(
+        fit: StackFit.expand,
+        children: [
+          FutureBuilder<void>(
+            future: _ready,
+            builder: (context, snapshot) {
+              final controller = _controller;
+              if (snapshot.hasError) {
+                return const Center(
+                  child: Text('無法播放這部影片',
+                      style: TextStyle(color: Colors.white)),
+                );
+              }
+              if (snapshot.connectionState != ConnectionState.done ||
+                  controller == null) {
+                return const Center(child: CircularProgressIndicator());
+              }
+              final size = controller.value.size;
+              return SizedBox.expand(
+                child: FittedBox(
+                  fit: BoxFit.cover,
+                  clipBehavior: Clip.hardEdge,
+                  child: SizedBox(
+                    width: size.width,
+                    height: size.height,
+                    child: VideoPlayer(controller),
+                  ),
+                ),
+              );
+            },
+          ),
+          const Align(
+            alignment: Alignment.bottomCenter,
+            child: SafeArea(
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Text(
+                  '實際桌布會循環、靜音並置中填滿螢幕',
+                  style: TextStyle(color: Colors.white),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _EmptyState extends StatelessWidget {
   const _EmptyState({required this.target});
   final WallpaperTarget target;
@@ -351,7 +461,8 @@ class _EmptyState extends StatelessWidget {
             const Icon(Icons.wallpaper_outlined, size: 48),
             const SizedBox(height: 16),
             Text(
-              '「${target.label}」清單是空的。\n在照片長按多選、或在大圖選「加入輪播」把圖片加進來。',
+              '「${target.label}」清單是空的。\n'
+              '${target == WallpaperTarget.home ? '在相簿長按多選，或從大圖加入圖片與影片。' : '在相簿長按多選，或從大圖加入圖片。'}',
               textAlign: TextAlign.center,
             ),
           ],
@@ -397,7 +508,7 @@ class _PlaylistTile extends StatelessWidget {
                   child: const Icon(Icons.broken_image_outlined, size: 20),
                 );
               }
-              return PhotoThumb(asset: asset, side: 96, showVideoBadge: false);
+              return PhotoThumb(asset: asset, side: 96, showVideoBadge: true);
             },
           ),
         ),
@@ -410,19 +521,31 @@ class _PlaylistTile extends StatelessWidget {
           overflow: TextOverflow.ellipsis,
         ),
       ),
-      subtitle: Text(
-        item.cropped ? '已裁切' : '未裁切（套用時會自動置中裁切）',
-        style: TextStyle(
-          fontSize: 12,
-          color: item.cropped ? Colors.green : null,
-        ),
-      ),
+      subtitle: item.video
+          ? FutureBuilder<AssetEntity?>(
+              future: assetFuture,
+              builder: (context, snap) {
+                final duration = snap.data?.videoDuration ?? Duration.zero;
+                final minutes = duration.inMinutes;
+                final seconds = duration.inSeconds.remainder(60);
+                final time = '$minutes:${seconds.toString().padLeft(2, '0')}';
+                return Text('影片・$time・置中填滿',
+                    style: const TextStyle(fontSize: 12));
+              },
+            )
+          : Text(
+              item.cropped ? '已裁切' : '未裁切（套用時會自動置中裁切）',
+              style: TextStyle(
+                fontSize: 12,
+                color: item.cropped ? Colors.green : null,
+              ),
+            ),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           IconButton(
-            icon: const Icon(Icons.crop),
-            tooltip: '預覽／裁切',
+            icon: Icon(item.video ? Icons.play_circle_outline : Icons.crop),
+            tooltip: item.video ? '預覽影片' : '預覽／裁切',
             visualDensity: VisualDensity.compact,
             onPressed: onOpen,
           ),

@@ -126,15 +126,32 @@ AppBar selectionAppBar({
             final navigator = Navigator.of(context);
             final chosen = selected();
             var added = 0;
+            final addedByTarget = <WallpaperTarget, int>{};
             for (final t in targets) {
-              added += await WallpaperPlaylist.addAll(chosen, t);
+              final count = await WallpaperPlaylist.addAll(chosen, t);
+              addedByTarget[t] = count;
+              added += count;
             }
             selection.clear();
             final label = targets.length >= 2 ? '主畫面與鎖定' : targets.first.label;
+            final hasVideo = chosen.any((a) => a.type == AssetType.video);
+            final String message;
+            if (targets.length >= 2 && added > 0) {
+              message =
+                  '已加入主畫面 ${addedByTarget[WallpaperTarget.home] ?? 0} 筆、'
+                  '鎖定 ${addedByTarget[WallpaperTarget.lock] ?? 0} 張'
+                  '${hasVideo ? '（影片只加入主畫面）' : ''}';
+            } else if (added > 0) {
+              message = '已加入 $added 筆到$label輪播';
+            } else if (targets.length == 1 &&
+                targets.first == WallpaperTarget.lock &&
+                hasVideo) {
+              message = '影片只能加入主畫面輪播；圖片可能已在清單中';
+            } else {
+              message = '沒有可加入的素材（格式不支援或已在清單中）';
+            }
             messenger.showSnackBar(SnackBar(
-              content: Text(added > 0
-                  ? '已加入 $added 筆到$label輪播'
-                  : '沒有可加入的圖片（不支援影片或已在清單中）'),
+              content: Text(message),
               action: added > 0
                   ? SnackBarAction(
                       label: '檢視',
