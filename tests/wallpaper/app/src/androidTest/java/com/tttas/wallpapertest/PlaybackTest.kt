@@ -67,6 +67,11 @@ class PlaybackTest {
         val latch = CountDownLatch(1)
         main {
             val view = if (preview) activity.previewView!! else activity.view
+            if (view.width <= 0 || view.height <= 0 || !view.holder.surface.isValid) {
+                code = PixelCopy.ERROR_SOURCE_NO_DATA
+                latch.countDown()
+                return@main
+            }
             val b = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
             result = b
             PixelCopy.request(view, b, { code = it; latch.countDown() }, Handler(Looper.getMainLooper()))
