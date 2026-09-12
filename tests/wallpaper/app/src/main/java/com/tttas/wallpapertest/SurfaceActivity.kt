@@ -10,10 +10,11 @@ class SurfaceActivity : Activity(), SurfaceHolder.Callback {
     lateinit var view: SurfaceView
     lateinit var playback: WallpaperPlayback
     var preview: WallpaperPlayback? = null
+    var previewView: SurfaceView? = null
     private lateinit var layout: FrameLayout
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
-        playback = WallpaperPlayback(this)
+        playback = WallpaperPlayback(this, intent.getStringExtra("side") ?: "home")
         view = SurfaceView(this)
         view.holder.addCallback(this)
         layout = FrameLayout(this)
@@ -26,9 +27,10 @@ class SurfaceActivity : Activity(), SurfaceHolder.Callback {
         playback.setVisible(true)
     }
     override fun surfaceDestroyed(holder: SurfaceHolder) { playback.detach() }
-    fun addPreview() {
+    fun addPreview(side: String = "home") {
         val second = SurfaceView(this)
-        val engine = WallpaperPlayback(this)
+        previewView = second
+        val engine = WallpaperPlayback(this, side)
         preview = engine
         second.holder.addCallback(object : SurfaceHolder.Callback {
             override fun surfaceCreated(h: SurfaceHolder) {}
@@ -44,6 +46,7 @@ class SurfaceActivity : Activity(), SurfaceHolder.Callback {
     fun closePreview() {
         preview?.detach()
         preview = null
+        previewView = null
         layout.removeViewAt(1)
     }
     override fun onDestroy() { preview?.detach(); playback.detach(); super.onDestroy() }

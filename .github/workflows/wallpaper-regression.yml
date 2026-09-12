@@ -1,6 +1,7 @@
 name: Wallpaper runtime regression
 on:
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:
@@ -32,7 +33,7 @@ jobs:
       - name: Test actual Surface pixels and playback lifecycle
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 30
+          api-level: 34
           arch: x86_64
           disable-animations: true
           script: bash tests/wallpaper/run_emulator_tests.sh

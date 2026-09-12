@@ -72,18 +72,21 @@ class NativeWallpaper {
   }
 
   /// Live wallpaper (mode B): copies the given ORIGINAL files into the app's
-  /// private dir and writes the live manifest. [items] is an ordered list of
+  /// private dir for [side] ("home"/"lock") and writes its live manifest.
+  /// [items] is an ordered list of
   /// `{'srcPath','id','ext','type','mime','zoom','focusX','focusY','animated'}`
   /// maps, with optional width/height. All items honor their saved crop.
   /// Does NOT set the wallpaper — call [openLiveWallpaperPreview] after.
   /// Throws [PlatformException] on failure.
   static Future<void> applyLive({
+    String side = 'home',
     required List<Map<String, dynamic>> items,
     required int liveSeconds,
     required int loops,
     required bool shuffle,
   }) async {
     await _channel.invokeMethod<int>('applyLive', {
+      'side': side,
       'items': items,
       'seconds': liveSeconds,
       'loops': loops,
@@ -91,9 +94,9 @@ class NativeWallpaper {
     });
   }
 
-  /// Opens the system "choose live wallpaper" preview for our service. The user
+  /// Opens the system preview for the home or lock playlist component. The user
   /// must confirm there (the app cannot set a live wallpaper silently).
-  static Future<void> openLiveWallpaperPreview() async {
-    await _channel.invokeMethod<bool>('openLiveWallpaperPreview');
+  static Future<void> openLiveWallpaperPreview({String side = 'home'}) async {
+    await _channel.invokeMethod<bool>('openLiveWallpaperPreview', {'side': side});
   }
 }

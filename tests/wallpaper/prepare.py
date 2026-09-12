@@ -2,13 +2,17 @@
 from pathlib import Path
 import subprocess
 import json
+import shutil
+import runpy
 
 repo = Path(__file__).resolve().parents[2]
 app = Path(__file__).resolve().parent / "app"
 dest = app / "src/main/java/com/tttas/wallpapertest"
-for name in ("WallpaperRenderer.kt", "WallpaperPlayback.kt", "WallpaperWorker.kt"):
+for name in ("WallpaperRenderer.kt", "WallpaperPlayback.kt", "WallpaperWorker.kt", "PlaylistWallpaperService.kt"):
     source = (repo / "flutter_src/native" / name).read_text(encoding="utf-8")
     (dest / name).write_text(source.replace("__PACKAGE__", "com.tttas.wallpapertest"), encoding="utf-8")
+shutil.copytree(repo / "flutter_src/native/res", app / "src/main/res", dirs_exist_ok=True)
+runpy.run_path(str(repo / "flutter_src/native/inject_wallpaper_services.py"))["inject"](app / "src/main/AndroidManifest.xml")
 assets = app / "src/main/assets"
 assets.mkdir(parents=True, exist_ok=True)
 # Distinct quadrants expose vertical inversion, aspect-ratio and crop mistakes.

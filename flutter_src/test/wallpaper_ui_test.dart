@@ -30,10 +30,10 @@ void main() {
       expect(find.text(text), findsOneWidget);
     }
     final lock = tester.widget<PopupMenuItem<String>>(
-      find.ancestor(of: find.text('加入鎖定輪播（僅支援圖片）'),
+      find.ancestor(of: find.text('加入鎖定輪播'),
           matching: find.byType(PopupMenuItem<String>)),
     );
-    expect(lock.enabled, isFalse);
+    expect(lock.enabled, isTrue);
     await tester.tap(find.text('設為桌布'));
     await tester.pumpAndSettle();
     expect(find.byType(WallpaperCropPage), findsOneWidget);
@@ -58,11 +58,48 @@ void main() {
     await tester.tap(find.text('設定'));
     await tester.pumpAndSettle();
     expect(find.text('主畫面每項播放時間（圖片、GIF、影片皆適用）'), findsOneWidget);
-    await tester.tap(find.text('10 秒'));
+    await tester.tap(find.byKey(const ValueKey('home_10')));
+    await tester.tap(find.byKey(const ValueKey('lock_60')));
     await tester.tap(find.byType(SwitchListTile));
     await tester.tap(find.text('完成'));
     await tester.pumpAndSettle();
     expect(WallpaperPlaylist.settings.value.liveSeconds, 10);
+    expect(WallpaperPlaylist.settings.value.lockLiveSeconds, 60);
     expect(WallpaperPlaylist.settings.value.shuffle, isTrue);
+  });
+
+  test('Lock video crop persists without changing the home copy', () async {
+    final asset = AssetEntity(id: 'shared-video', typeInt: 2,
+        width: 320, height: 240, title: 'sample.mp4');
+    expect(await WallpaperPlaylist.add(asset, WallpaperTarget.home), isTrue);
+    expect(await WallpaperPlaylist.add(asset, WallpaperTarget.lock), isTrue);
+    await WallpaperPlaylist.setCropped(WallpaperTarget.lock, asset.id, '',
+        zoom: 2, focusX: .25, focusY: .75, sourceWidth: 320, sourceHeight: 240);
+    await WallpaperPlaylist.init();
+    final home = WallpaperPlaylist.homeItems.value.single;
+    final lock = WallpaperPlaylist.lockItems.value.single;
+    expect(lock.video, isTrue);
+    expect(lock.cropped, isTrue);
+    expect(lock.cropZoom, 2);
+    expect(lock.cropFocusY, .75);
+    expect(lock.sourceWidth, 320);
+    expect(home.cropZoom, 0);
+    expect(home.cropped, isFalse);
+  });
+
+  testWidgets('Lock tab edits its own interval and applies its own list', (tester) async {
+    await tester.pumpWidget(const MaterialApp(
+      home: WallpaperPage(initialTarget: WallpaperTarget.lock),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.text('套用鎖定輪播'), findsOneWidget);
+    await tester.tap(find.text('10 秒'));
+    await tester.pumpAndSettle();
+    expect(WallpaperPlaylist.settings.value.lockLiveSeconds, 10);
+    expect(WallpaperPlaylist.settings.value.liveSeconds, 30);
+    await tester.tap(find.text('主畫面'));
+    await tester.pumpAndSettle();
+    expect(find.text('套用主畫面輪播'), findsOneWidget);
+    expect(WallpaperPlaylist.settings.value.liveSeconds, 30);
   });
 }

@@ -16,7 +16,7 @@ import org.json.JSONObject
 import java.io.File
 
 /** Also exercised by instrumented tests on a real Android Surface. Calls use the main thread. */
-class WallpaperPlayback(private val context: Context) {
+class WallpaperPlayback(private val context: Context, private val side: String = "home") {
     private data class Item(
         val path: String, val zoom: Float, val fx: Float, val fy: Float,
         val video: Boolean, val animated: Boolean, val width: Int, val height: Int
@@ -72,7 +72,7 @@ class WallpaperPlayback(private val context: Context) {
 
     private fun loadManifest() {
         try {
-            val text = File(context.filesDir, "wallpaper_live.json").readText()
+            val text = WallpaperStore.liveManifest(context, side).readText()
             if (text == manifestText) return
             val root = JSONObject(text)
             val array = root.getJSONArray("items")

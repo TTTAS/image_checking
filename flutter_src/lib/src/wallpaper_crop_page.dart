@@ -245,9 +245,10 @@ class _WallpaperCropPageState extends State<WallpaperCropPage>
     try {
       final (z, fx, fy) = _currentCrop();
       final size = _video!.value.size;
+      final target = widget.target ?? (_flags == kFlagLock ? WallpaperTarget.lock : WallpaperTarget.home);
       if (saveCrop) {
         await WallpaperPlaylist.setCropped(
-          WallpaperTarget.home, widget.asset.id, '',
+          target, widget.asset.id, '',
           zoom: z, focusX: fx, focusY: fy,
           sourceWidth: size.width.round(), sourceHeight: size.height.round(),
         );
@@ -255,6 +256,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage>
       final file = await widget.asset.originFile ?? await widget.asset.file;
       if (file == null) throw StateError('影片已移除或無法讀取');
       await NativeWallpaper.applyLive(
+        side: target.key,
         items: [{
           'id': widget.asset.id, 'srcPath': file.path,
           'ext': file.path.split('.').last.toLowerCase(),
@@ -262,16 +264,17 @@ class _WallpaperCropPageState extends State<WallpaperCropPage>
           'zoom': z, 'focusX': fx, 'focusY': fy, 'animated': false,
           'width': size.width.round(), 'height': size.height.round(),
         }],
-        liveSeconds: WallpaperPlaylist.settings.value.liveSeconds,
+        liveSeconds: WallpaperPlaylist.settings.value.secondsFor(target),
         loops: WallpaperPlaylist.settings.value.loopsBeforeNext,
         shuffle: false,
       );
       await _video?.pause();
-      await NativeWallpaper.openLiveWallpaperPreview();
+      await NativeWallpaper.openLiveWallpaperPreview(side: target.key);
       if (!mounted) return;
       setState(() => _busy = false);
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('請在系統預覽確認「設定桌布」，影片會依裁切範圍靜音循環播放'),
+      final label = !_isPlaylist && _flags == (kFlagSystem | kFlagLock) ? '主畫面與鎖定畫面' : target.label;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('請在系統預覽選「$label」，影片依裁切範圍靜音循環播放'),
       ));
     } catch (e) {
       _fail(e);
@@ -400,7 +403,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage>
             const Padding(
               padding: EdgeInsets.only(bottom: 4),
               child: Text(
-                '主畫面輪播保留動畫；單張設定與鎖定桌布使用靜態畫面。',
+                '主畫面與鎖定輪播都保留動畫；此處單張圖片設定會擷取靜態畫面。',
                 style: TextStyle(color: Colors.white54, fontSize: 11),
                 textAlign: TextAlign.center,
               ),
@@ -472,12 +475,12 @@ class _WallpaperCropPageState extends State<WallpaperCropPage>
             mainAxisSize: MainAxisSize.min,
             children: [
               Text(
-                _isVideo ? '影片依裁切範圍靜音循環播放，不更動輪播清單。鎖定輪播僅支援圖片；套用時需在系統預覽確認。' : '主畫面＝解鎖後的桌面；鎖定＝沒解鎖時的畫面；兩者＝同一張寫入兩邊。此處只設定一次，不影響輪播清單。',
+                _isVideo ? '影片依裁切範圍靜音循環播放，不更動輪播清單。請在系統預覽選擇相同畫面；若只有「兩者」，會同時更換兩邊。' : '主畫面＝解鎖後的桌面；鎖定＝沒解鎖時的畫面；兩者＝同一張寫入兩邊。此處只設定一次，不影響輪播清單。',
                 style: TextStyle(color: Colors.white60, fontSize: 11),
                 textAlign: TextAlign.center,
               ),
               const SizedBox(height: 8),
-              if (!_isVideo) SegmentedButton<int>(
+              SegmentedButton<int>(
                 segments: const [
                   ButtonSegment(value: kFlagSystem, label: Text('主畫面')),
                   ButtonSegment(value: kFlagLock, label: Text('鎖定')),

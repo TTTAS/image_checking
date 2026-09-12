@@ -2,6 +2,10 @@ package com.tttas.wallpapertest
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.app.WallpaperManager
+import android.content.Intent
+import android.content.ComponentName
+import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
 import android.view.PixelCopy
@@ -26,6 +30,7 @@ class PlaybackTest {
     private var serial = 0
 
     @Before fun prepare() {
+        context.getSharedPreferences("wallpaper_modes", 0).edit().clear().commit()
         for (name in listOf("quadrants.mp4", "rotated.mp4", "motion.gif", "sample.webm")) {
             context.assets.open(name).use { input ->
                 File(context.filesDir, name).outputStream().use { input.copyTo(it) }
@@ -49,21 +54,22 @@ class PlaybackTest {
                 .put("seconds", seconds).put("revision", serial++).toString())
     }
 
-    private fun launch() {
-        scenario = ActivityScenario.launch(SurfaceActivity::class.java)
+    private fun launch(side: String = "home") {
+        scenario = ActivityScenario.launch(Intent(context, SurfaceActivity::class.java).putExtra("side", side))
         scenario.onActivity { activity = it }
     }
 
     private fun main(block: () -> Unit) = instrumentation.runOnMainSync(block)
 
-    private fun pixels(): Bitmap {
+    private fun pixels(preview: Boolean = false): Bitmap {
         var result: Bitmap? = null
         var code = -1
         val latch = CountDownLatch(1)
         main {
-            val b = Bitmap.createBitmap(activity.view.width, activity.view.height, Bitmap.Config.ARGB_8888)
+            val view = if (preview) activity.previewView!! else activity.view
+            val b = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
             result = b
-            PixelCopy.request(activity.view, b, { code = it; latch.countDown() }, Handler(Looper.getMainLooper()))
+            PixelCopy.request(view, b, { code = it; latch.countDown() }, Handler(Looper.getMainLooper()))
         }
         check(latch.await(3, TimeUnit.SECONDS)) { "PixelCopy timed out" }
         check(code == PixelCopy.SUCCESS) { "PixelCopy failed: $code" }
@@ -75,12 +81,12 @@ class PlaybackTest {
         kotlin.math.abs(Color.green(actual) - Color.green(expected)) < 65 &&
         kotlin.math.abs(Color.blue(actual) - Color.blue(expected)) < 65
 
-    private fun awaitPixels(name: String, timeoutMs: Long = 15000, check: (Bitmap) -> Boolean): Bitmap {
+    private fun awaitPixels(name: String, timeoutMs: Long = 15000, preview: Boolean = false, check: (Bitmap) -> Boolean): Bitmap {
         val deadline = System.currentTimeMillis() + timeoutMs
         var latest: Bitmap? = null
         while (System.currentTimeMillis() < deadline) {
             try {
-                val b = pixels()
+                val b = pixels(preview)
                 latest?.recycle()
                 latest = b
                 if (check(b)) { evidence(name, b); return b }
@@ -97,7 +103,7 @@ class PlaybackTest {
         File(dir, "$name.png").outputStream().use { b.compress(Bitmap.CompressFormat.PNG, 100, it) }
     }
 
-    private fun solid(name: String, color: Int) = awaitPixels(name) {
+    private fun solid(name: String, color: Int, preview: Boolean = false) = awaitPixels(name, preview = preview) {
         matches(it.getPixel(it.width / 2, it.height / 2), color)
     }.recycle()
 
@@ -223,5 +229,58 @@ class PlaybackTest {
         solid("18-gif-first-frame", Color.MAGENTA)
         solid("19-gif-next-frame", Color.YELLOW)
         solid("20-gif-looped-frame", Color.MAGENTA)
+    }
+
+    private fun source(name: String, zoom: Double = 0.0) = mapOf<String, Any?>(
+        "id" to name, "srcPath" to File(context.filesDir, name).path,
+        "ext" to File(name).extension, "zoom" to zoom, "focusX" to .25, "focusY" to .25)
+
+    @Test fun homeAndLockPlaylistsStayIndependentAcrossReapplyAndFailure() {
+        WallpaperStore.applyLive(context, listOf(source("still.png")), 30, 1, false, "home")
+        WallpaperStore.applyLive(context, listOf(source("quadrants.mp4", 2.0)), 1, 1, false, "lock")
+        val homeManifest = WallpaperStore.liveManifest(context, "home").readText()
+        launch()
+        solid("21-home-white", Color.WHITE)
+        main { activity.addPreview("lock") }
+        solid("22-lock-cropped-video", Color.RED, preview = true)
+        solid("23-home-unaffected", Color.WHITE)
+        WallpaperStore.applyLive(context, listOf(source("sample.webm")), 1, 1, false, "lock")
+        solid("24-lock-new-video", Color.CYAN, preview = true)
+        val lockManifest = WallpaperStore.liveManifest(context, "lock").readText()
+        try {
+            WallpaperStore.applyLive(context, listOf(source("missing.mp4")), 1, 1, false, "lock")
+            fail("Missing lock video must fail")
+        } catch (_: IllegalStateException) {}
+        assertEquals(homeManifest, WallpaperStore.liveManifest(context, "home").readText())
+        assertEquals(lockManifest, WallpaperStore.liveManifest(context, "lock").readText())
+        solid("25-lock-preserved", Color.CYAN, preview = true)
+        main { activity.closePreview() }
+        solid("26-home-after-lock-preview", Color.WHITE)
+    }
+
+    @Test fun lockOnlyPlaylistRotatesAndOldStaticWorkerCannotOverwriteIt() {
+        val static = File(context.filesDir, "still.png").path
+        WallpaperStore.applyRotation(context, emptyList(), listOf(static), false)
+        val manager = WallpaperManager.getInstance(context)
+        val oldId = manager.getWallpaperId(WallpaperManager.FLAG_LOCK)
+        WallpaperStore.applyLive(context, listOf(source("quadrants.mp4", 2.0),
+            source("motion.gif")), 1, 1, false, "lock")
+        launch("lock")
+        solid("27-lock-video", Color.RED)
+        solid("28-lock-gif", Color.MAGENTA)
+        WallpaperStore.advance(context)
+        assertEquals("Legacy worker must not replace live lock wallpaper",
+            oldId, manager.getWallpaperId(WallpaperManager.FLAG_LOCK))
+        solid("29-lock-video-next-cycle", Color.RED)
+    }
+
+    @Test fun bothWallpaperComponentsAreRegisteredForTheSystemPicker() {
+        for (name in listOf("PlaylistWallpaperService", "LockPlaylistWallpaperService")) {
+            val info = context.packageManager.getServiceInfo(
+                ComponentName(context.packageName, context.packageName + "." + name), PackageManager.GET_META_DATA)
+            assertEquals("android.permission.BIND_WALLPAPER", info.permission)
+            assertTrue(info.exported)
+            assertTrue(info.metaData.getInt("android.service.wallpaper") != 0)
+        }
     }
 }

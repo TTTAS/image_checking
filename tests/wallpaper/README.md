@@ -1,36 +1,61 @@
-# Wallpaper regression
+# Wallpaper regression and lock-screen support
 
-The test app compiles the production WallpaperPlayback, WallpaperRenderer and
-WallpaperStore sources. It uses Android MediaPlayer, real SurfaceViews and
-PixelCopy; it does not mock decoded frames or rendering.
+Version 1.0.7+8 gives home and lock their own live playlist, media directory,
+crop transforms and item duration. PlaylistWallpaperService reads the legacy
+home manifest; LockPlaylistWallpaperService reads wallpaper_live_lock.json.
+The Android picker receives a different component for each destination, so its
+preview displays the selected playlist. Applying one tab never republishes the
+other tab's data. Old static worker jobs skip destinations switched to live.
 
-Run `python3 tests/wallpaper/prepare.py` (requires ffmpeg), then
-`gradle -p tests/wallpaper connectedDebugAndroidTest` with Android API 30+ connected.
-The GitHub workflow runs this on an API 30 emulator and uploads screenshots and
-JUnit reports. This verifies the rendering engine; a phone/system wallpaper
-picker still needs the acceptance steps below.
+The app cannot silently choose the destination in Android's wallpaper picker.
+Choose Home for the home playlist and Lock for the lock playlist. Independent
+lock live wallpaper requires support in the device's picker (Android 14+
+provides standard support). If only Both is offered, choosing it changes both
+screens to that component's playlist; it does not provide two independent lists.
 
-## Phone acceptance for 1.0.6+7
+## Automated verification
 
-1. Open an MP4, open its wallpaper menu. Verify Set wallpaper, Add to home
-   playlist, Playlist and Settings. Lock-only actions explain the image limit.
-2. Set wallpaper opens the playing video in the crop frame. Zoom and drag to a
-   recognizable corner. Confirm in the Android wallpaper picker. Both its preview
-   and the installed home wallpaper must show the same corner, moving and muted.
-3. Add still image, GIF, MP4 and WebM to home playlist. Crop the video, save,
-   reopen its crop page and verify framing is restored. Apply with 10-second
-   interval. All items must appear in order and video must loop if shorter.
-4. Open the system preview again, confirm, return home. No black screen after
-   either opening or closing preview.
-5. Open another app, turn screen off/on and return home. Playback resumes.
-6. Apply one rotated portrait video. Its orientation and aspect ratio must match
-   the in-app preview.
-7. Delete a playlist source before Apply: explain the missing source and preserve
-   the old applied playlist. A decoder failure skips to another valid item; when
-   all sources fail, show a readable error instead of a blank black wallpaper.
-8. Use Settings from both the video menu and playlist. Interval/shuffle values
-   must be shared. Existing still-image single wallpaper and lock rotation must
-   continue working.
+The test app compiles the production playback, renderer, store and service
+sources, with the same service-registration script as the release app.
+It exercises real MediaPlayer, SurfaceViews and PixelCopy, not mocked pixels.
 
-Automated tests do not cover manufacturer-specific wallpaper picker behavior,
-all codecs/HDR formats, or power consumption on physical devices.
+Run `python3 tests/wallpaper/prepare.py` with FFmpeg installed, then
+`gradle -p tests/wallpaper assembleDebug assembleDebugAndroidTest` and
+`bash tests/wallpaper/run_emulator_tests.sh` with an Android 14 emulator connected.
+
+Both workflows have automatic commit/PR triggers disabled. Manually run
+Build APK once after finalizing changes; its reusable Android test job runs
+first, followed by Flutter tests and the APK build in the same workflow run.
+There is no AAB or Release publication.
+
+Coverage includes mixed media, crop/loop/pause/resume, rotated video, GIF frames,
+bad-file recovery, simultaneous engines, separate home/lock reapply and rollback,
+lock-only rotation, legacy-worker protection and picker service registration.
+Flutter tests cover menus, lock-video crop persistence and independent intervals.
+Instrumentation output and screenshots are uploaded for review.
+
+## Phone acceptance
+
+1. Add a video through the single-item and multi-select Lock playlist actions.
+   Both and Home actions must remain available for the same video.
+2. Open Lock, crop a video to a recognizable corner, save and reopen. Verify
+   framing is restored while the Home copy retains its own framing.
+3. Add a GIF and still image to Lock; set its duration to 10 seconds. Apply Lock
+   and choose Lock in the system picker. Video/GIF must move, loop and advance.
+4. Set a different Home playlist and duration. Apply Home, choose Home in the
+   system picker and lock/unlock repeatedly. Each screen must retain its list.
+5. Reapply the Lock list with a new crop or new video. Home must remain unchanged.
+6. Test a single video from Set wallpaper with Lock selected; confirm Lock in the
+   system picker. The stored playlist itself must not be replaced.
+7. Open/close preview, turn screen off/on and return from another app. Playback
+   must recover. On screen-off it should not continue decoding.
+8. Test a missing source and a corrupt clip. Missing source must leave the last
+   applied playlist intact; corrupt playback skips to another item or shows a
+   readable error. A later valid reapply must recover.
+9. With an old static lock rotation previously scheduled, apply lock video and
+   wait past the old interval. The old job must not overwrite the video wallpaper.
+10. On a picker without Lock-only support, verify the app explains that choosing
+    Both changes both screens. Do not report independent lock support there.
+
+These tests do not replace manufacturer-specific picker testing or establish
+support for every codec/HDR format.

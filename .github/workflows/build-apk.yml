@@ -4,7 +4,12 @@ on:
   workflow_dispatch:
 
 jobs:
+  wallpaper-tests:
+    uses: ./.github/workflows/wallpaper-regression.yml
+    permissions:
+      contents: read
   build:
+    needs: wallpaper-tests
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -43,6 +48,7 @@ jobs:
 
       - name: Inject native Kotlin code
         run: |
+          python3 flutter_src/native/inject_wallpaper_services.py android/app/src/main/AndroidManifest.xml
           GEN=$(find android/app/src/main -name MainActivity.kt | head -1)
           PKG=$(grep -m1 '^package ' "$GEN" | sed 's/^package //; s/[[:space:]]*$//')
           PKGDIR=$(dirname "$GEN")

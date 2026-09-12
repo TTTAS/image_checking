@@ -95,6 +95,7 @@ class WallpaperSettings {
     this.intervalMinutes = 60,
     this.shuffle = false,
     this.liveSeconds = 30,
+    this.lockLiveSeconds = 30,
     this.loopsBeforeNext = 1,
   });
 
@@ -102,6 +103,9 @@ class WallpaperSettings {
   int intervalMinutes;
   bool shuffle;
   int liveSeconds;
+  int lockLiveSeconds;
+  int secondsFor(WallpaperTarget target) =>
+      target == WallpaperTarget.home ? liveSeconds : lockLiveSeconds;
   int loopsBeforeNext;
 
   WallpaperSettings copyWith({
@@ -109,6 +113,7 @@ class WallpaperSettings {
     int? intervalMinutes,
     bool? shuffle,
     int? liveSeconds,
+    int? lockLiveSeconds,
     int? loopsBeforeNext,
   }) =>
       WallpaperSettings(
@@ -116,6 +121,7 @@ class WallpaperSettings {
         intervalMinutes: intervalMinutes ?? this.intervalMinutes,
         shuffle: shuffle ?? this.shuffle,
         liveSeconds: liveSeconds ?? this.liveSeconds,
+        lockLiveSeconds: lockLiveSeconds ?? this.lockLiveSeconds,
         loopsBeforeNext: loopsBeforeNext ?? this.loopsBeforeNext,
       );
 
@@ -124,6 +130,7 @@ class WallpaperSettings {
         'intervalMinutes': intervalMinutes,
         'shuffle': shuffle,
         'liveSeconds': liveSeconds,
+        'lockLiveSeconds': lockLiveSeconds,
         'loopsBeforeNext': loopsBeforeNext,
       };
 
@@ -132,6 +139,7 @@ class WallpaperSettings {
         intervalMinutes: (j['intervalMinutes'] as int?) ?? 60,
         shuffle: (j['shuffle'] as bool?) ?? false,
         liveSeconds: (j['liveSeconds'] as int?) ?? 30,
+        lockLiveSeconds: (j['lockLiveSeconds'] as int?) ?? 30,
         loopsBeforeNext: (j['loopsBeforeNext'] as int?) ?? 1,
       );
 }
@@ -206,8 +214,7 @@ class WallpaperPlaylist {
   static bool accepts(AssetEntity asset, WallpaperTarget target) {
     final mime = _mimeOf(asset);
     if (asset.type == AssetType.image) return kWallpaperMimes.contains(mime);
-    return target == WallpaperTarget.home &&
-        asset.type == AssetType.video &&
+    return asset.type == AssetType.video &&
         kWallpaperVideoMimes.contains(mime);
   }
 

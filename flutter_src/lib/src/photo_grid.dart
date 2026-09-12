@@ -134,19 +134,13 @@ AppBar selectionAppBar({
             }
             selection.clear();
             final label = targets.length >= 2 ? '主畫面與鎖定' : targets.first.label;
-            final hasVideo = chosen.any((a) => a.type == AssetType.video);
             final String message;
             if (targets.length >= 2 && added > 0) {
               message =
                   '已加入主畫面 ${addedByTarget[WallpaperTarget.home] ?? 0} 筆、'
-                  '鎖定 ${addedByTarget[WallpaperTarget.lock] ?? 0} 張'
-                  '${hasVideo ? '（影片只加入主畫面）' : ''}';
+                  '鎖定 ${addedByTarget[WallpaperTarget.lock] ?? 0} 筆';
             } else if (added > 0) {
               message = '已加入 $added 筆到$label輪播';
-            } else if (targets.length == 1 &&
-                targets.first == WallpaperTarget.lock &&
-                hasVideo) {
-              message = '影片只能加入主畫面輪播；圖片可能已在清單中';
             } else {
               message = '沒有可加入的素材（格式不支援或已在清單中）';
             }

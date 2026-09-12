@@ -20,6 +20,15 @@ object WallpaperStore {
     private const val MANIFEST = "wallpaper_rotation.json"
     const val WORK_NAME = "wallpaper_rotate"
 
+    fun liveManifest(context: Context, side: String): File {
+        require(side == "home" || side == "lock") { "Unknown wallpaper destination" }
+        // Preserve the original home manifest for existing installations.
+        return File(context.filesDir, if (side == "home") "wallpaper_live.json" else "wallpaper_live_lock.json")
+    }
+
+    private fun modes(context: Context) =
+        context.getSharedPreferences("wallpaper_modes", Context.MODE_PRIVATE)
+
     private fun manifestFile(context: Context): File =
         File(context.filesDir, MANIFEST)
 
@@ -56,13 +65,15 @@ object WallpaperStore {
         seconds: Int,
         loops: Int,
         shuffle: Boolean,
+        side: String = "home",
     ): Int {
+        val manifest = liveManifest(context, side)
         val base = File(context.filesDir, "wallpaper_live").apply {
             if (!exists() && !mkdirs()) throw IllegalStateException("無法建立桌布資料夾")
         }
-        val active = File(base, "home")
-        val staging = File(base, "staging")
-        val previous = File(base, "previous")
+        val active = File(base, side)
+        val staging = File(base, "staging_$side")
+        val previous = File(base, "previous_$side")
         staging.deleteRecursively()
         if (!staging.mkdirs()) throw IllegalStateException("無法建立桌布暫存資料夾")
 
@@ -114,7 +125,6 @@ object WallpaperStore {
             return 0
         }
 
-        val manifest = File(context.filesDir, "wallpaper_live.json")
         val oldManifest = try {
             if (manifest.exists()) manifest.readText() else null
         } catch (_: Exception) {
@@ -138,15 +148,21 @@ object WallpaperStore {
             throw e
         }
         previous.deleteRecursively()
+        modes(context).edit().putBoolean("live_$side", true).apply()
         return arr.length()
     }
 
+    @Synchronized
     fun applyRotation(
         context: Context,
         homePaths: List<String>,
         lockPaths: List<String>,
         shuffle: Boolean,
     ) {
+        modes(context).edit().apply {
+            if (homePaths.isNotEmpty()) putBoolean("live_home", false)
+            if (lockPaths.isNotEmpty()) putBoolean("live_lock", false)
+        }.apply()
         val root = JSONObject().apply {
             put("home", JSONArray(homePaths))
             put("lock", JSONArray(lockPaths))
@@ -166,6 +182,7 @@ object WallpaperStore {
         return l
     }
 
+    @Synchronized
     fun advance(context: Context) {
         val root = readManifest(context) ?: return
         advanceSide(context, root, "home", "homeOrder", "homePos", 1)
@@ -215,6 +232,8 @@ object WallpaperStore {
     }
 
     private fun applyFile(context: Context, path: String, flags: Int) {
+        val side = if (flags == 2) "lock" else "home"
+        if (modes(context).getBoolean("live_$side", false)) return
         try {
             val (w, h) = screenSize(context)
             val bmp = decodeScaled(path, w, h) ?: return

@@ -112,10 +112,10 @@ class MainActivity : FlutterActivity() {
                         if (items == null) {
                             result.error("ARGS", "items required", null)
                         } else {
-                            applyLive(items, seconds, loops, shuffle, result)
+                            applyLive(items, seconds, loops, shuffle, call.argument<String>("side") ?: "home", result)
                         }
                     }
-                    "openLiveWallpaperPreview" -> openLiveWallpaperPreview(result)
+                    "openLiveWallpaperPreview" -> openLiveWallpaperPreview(call.argument<String>("side") ?: "home", result)
                     "cancelWallpaperWork" -> {
                         try {
                             WorkManager.getInstance(applicationContext)
@@ -312,11 +312,12 @@ class MainActivity : FlutterActivity() {
         seconds: Int,
         loops: Int,
         shuffle: Boolean,
+        side: String,
         result: MethodChannel.Result,
     ) {
         Thread {
             try {
-                val n = WallpaperStore.applyLive(applicationContext, items, seconds, loops, shuffle)
+                val n = WallpaperStore.applyLive(applicationContext, items, seconds, loops, shuffle, side)
                 if (n == 0) {
                     runOnUiThread { result.error("EMPTY", "沒有可用的桌布素材", null) }
                 } else {
@@ -328,12 +329,14 @@ class MainActivity : FlutterActivity() {
         }.start()
     }
 
-    private fun openLiveWallpaperPreview(result: MethodChannel.Result) {
+    private fun openLiveWallpaperPreview(side: String, result: MethodChannel.Result) {
         try {
+            require(side == "home" || side == "lock") { "Unknown wallpaper destination" }
+            val component = if (side == "lock") LockPlaylistWallpaperService::class.java else PlaylistWallpaperService::class.java
             val intent = Intent(WallpaperManager.ACTION_CHANGE_LIVE_WALLPAPER).apply {
                 putExtra(
                     WallpaperManager.EXTRA_LIVE_WALLPAPER_COMPONENT,
-                    ComponentName(this@MainActivity, PlaylistWallpaperService::class.java),
+                    ComponentName(this@MainActivity, component),
                 )
             }
             startActivity(intent)
