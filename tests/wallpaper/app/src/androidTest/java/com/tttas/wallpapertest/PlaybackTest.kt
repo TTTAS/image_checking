@@ -59,7 +59,13 @@ class PlaybackTest {
         scenario.onActivity { activity = it }
     }
 
-    private fun main(block: () -> Unit) = instrumentation.runOnMainSync(block)
+    // Setting the system wallpaper can recreate the activity asynchronously
+    // (for example after its wallpaper colors change). Always use the current
+    // instance, otherwise PixelCopy keeps polling a destroyed Surface.
+    private fun main(block: () -> Unit) = scenario.onActivity {
+        activity = it
+        block()
+    }
 
     private fun pixels(preview: Boolean = false): Bitmap {
         var result: Bitmap? = null
@@ -89,17 +95,18 @@ class PlaybackTest {
     private fun awaitPixels(name: String, timeoutMs: Long = 15000, preview: Boolean = false, check: (Bitmap) -> Boolean): Bitmap {
         val deadline = System.currentTimeMillis() + timeoutMs
         var latest: Bitmap? = null
+        var lastError: String? = null
         while (System.currentTimeMillis() < deadline) {
             try {
                 val b = pixels(preview)
                 latest?.recycle()
                 latest = b
                 if (check(b)) { evidence(name, b); return b }
-            } catch (_: IllegalStateException) {}
+            } catch (e: IllegalStateException) { lastError = e.message }
             Thread.sleep(80)
         }
         latest?.let { evidence("FAILED-$name", it) }
-        fail("Expected rendered pixels: $name (see screenshot)")
+        fail("Expected rendered pixels: $name; last PixelCopy error=$lastError; screenshot=${latest != null}")
         error("unreachable")
     }
 
