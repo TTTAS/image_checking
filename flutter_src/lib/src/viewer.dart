@@ -472,21 +472,65 @@ class _VideoControlsState extends State<_VideoControls> {
   bool _flashVisible = false;
   bool _flashForward = true;
 
+  Timer? _hideTimer;
+  bool _controlsVisible = true;
+
   VideoPlayerController get _c => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    // In full-screen the controls fade out on their own while playing.
+    if (widget.fullscreen) _scheduleHide();
+  }
 
   @override
   void dispose() {
     _flashTimer?.cancel();
+    _hideTimer?.cancel();
     super.dispose();
+  }
+
+  /// Hide the controls after a short delay — only in full-screen, and only
+  /// while the video is actually playing (paused videos keep them visible).
+  void _scheduleHide() {
+    _hideTimer?.cancel();
+    if (!widget.fullscreen || !_c.value.isPlaying) return;
+    _hideTimer = Timer(const Duration(seconds: 3), () {
+      if (mounted) setState(() => _controlsVisible = false);
+    });
+  }
+
+  void _showControls() {
+    setState(() => _controlsVisible = true);
+    _scheduleHide();
+  }
+
+  /// Single tap: in full-screen it reveals/dismisses the controls; inline it
+  /// keeps the original play/pause behaviour.
+  void _onTap() {
+    if (!widget.fullscreen) {
+      _togglePlay();
+      return;
+    }
+    if (_controlsVisible) {
+      _hideTimer?.cancel();
+      setState(() => _controlsVisible = false);
+    } else {
+      _showControls();
+    }
   }
 
   void _togglePlay() {
     if (_c.value.isPlaying) {
       _c.pause();
+      _hideTimer?.cancel();
+      setState(() => _controlsVisible = true);
     } else {
       _c.play();
+      setState(() {});
+      _scheduleHide();
     }
-    setState(() {});
   }
 
   void _seekBy(int seconds) {
@@ -503,6 +547,7 @@ class _VideoControlsState extends State<_VideoControls> {
     _flashTimer = Timer(const Duration(milliseconds: 600), () {
       if (mounted) setState(() => _flashVisible = false);
     });
+    if (widget.fullscreen) _showControls();
   }
 
   static String _fmt(Duration d) {
@@ -533,14 +578,14 @@ class _VideoControlsState extends State<_VideoControls> {
               Expanded(
                 child: GestureDetector(
                   behavior: HitTestBehavior.translucent,
-                  onTap: _togglePlay,
+                  onTap: _onTap,
                   onDoubleTap: () => _seekBy(-10),
                 ),
               ),
               Expanded(
                 child: GestureDetector(
                   behavior: HitTestBehavior.translucent,
-                  onTap: _togglePlay,
+                  onTap: _onTap,
                   onDoubleTap: () => _seekBy(10),
                 ),
               ),
@@ -584,7 +629,14 @@ class _VideoControlsState extends State<_VideoControls> {
           left: 0,
           right: 0,
           bottom: 0,
-          child: _bottomBar(),
+          child: IgnorePointer(
+            ignoring: !_controlsVisible,
+            child: AnimatedOpacity(
+              opacity: _controlsVisible ? 1 : 0,
+              duration: const Duration(milliseconds: 200),
+              child: _bottomBar(),
+            ),
+          ),
         ),
       ],
     );
