@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
 import 'package:video_player/video_player.dart';
@@ -308,7 +311,8 @@ class _ViewerPageState extends State<ViewerPage> {
   }
 }
 
-/// Plays a single video inside the viewer: tap to play/pause, with a scrub bar.
+/// Plays a single video inside the viewer: tap to play/pause, double-tap the
+/// left/right half to seek ±10s, a scrub bar, and a button to go full-screen.
 class _VideoView extends StatefulWidget {
   const _VideoView({super.key, required this.asset});
 
@@ -354,15 +358,12 @@ class _VideoViewState extends State<_VideoView> {
     super.dispose();
   }
 
-  void _togglePlay() {
+  void _openFullscreen() {
     final c = _controller;
     if (c == null) return;
-    if (c.value.isPlaying) {
-      c.pause();
-    } else {
-      c.play();
-    }
-    setState(() {});
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => _FullscreenVideoPage(controller: c),
+    ));
   }
 
   @override
@@ -377,31 +378,282 @@ class _VideoViewState extends State<_VideoView> {
     if (c == null || !c.value.isInitialized) {
       return const Center(child: CircularProgressIndicator());
     }
-    return GestureDetector(
-      onTap: _togglePlay,
-      child: Stack(
-        alignment: Alignment.center,
-        children: [
-          Center(
-            child: AspectRatio(
-              aspectRatio: c.value.aspectRatio,
-              child: VideoPlayer(c),
+    return _VideoControls(
+      controller: c,
+      fullscreen: false,
+      onToggleFullscreen: _openFullscreen,
+    );
+  }
+}
+
+/// Full-screen video page. Reuses the existing [VideoPlayerController] so
+/// playback continues seamlessly, hides the system bars, allows the device to
+/// rotate to landscape, and exposes a button to manually flip the orientation.
+class _FullscreenVideoPage extends StatefulWidget {
+  const _FullscreenVideoPage({required this.controller});
+
+  final VideoPlayerController controller;
+
+  @override
+  State<_FullscreenVideoPage> createState() => _FullscreenVideoPageState();
+}
+
+class _FullscreenVideoPageState extends State<_FullscreenVideoPage> {
+  bool _landscape = true;
+
+  @override
+  void initState() {
+    super.initState();
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
+    _applyOrientation();
+  }
+
+  void _applyOrientation() {
+    SystemChrome.setPreferredOrientations(_landscape
+        ? const [
+            DeviceOrientation.landscapeLeft,
+            DeviceOrientation.landscapeRight,
+          ]
+        : const [
+            DeviceOrientation.portraitUp,
+            DeviceOrientation.portraitDown,
+          ]);
+  }
+
+  void _toggleOrientation() {
+    setState(() => _landscape = !_landscape);
+    _applyOrientation();
+  }
+
+  @override
+  void dispose() {
+    // Restore the normal chrome and let the app follow device auto-rotate.
+    SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+    SystemChrome.setPreferredOrientations(const []);
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: _VideoControls(
+        controller: widget.controller,
+        fullscreen: true,
+        onToggleFullscreen: () => Navigator.of(context).maybePop(),
+        onRotate: _toggleOrientation,
+      ),
+    );
+  }
+}
+
+/// Interactive video surface + controls shared by the inline viewer and the
+/// full-screen page: tap to play/pause, double-tap the left/right half to seek
+/// ±10 s, a scrub bar with timestamps, and full-screen / rotation buttons.
+class _VideoControls extends StatefulWidget {
+  const _VideoControls({
+    required this.controller,
+    required this.fullscreen,
+    this.onToggleFullscreen,
+    this.onRotate,
+  });
+
+  final VideoPlayerController controller;
+  final bool fullscreen;
+  final VoidCallback? onToggleFullscreen;
+  final VoidCallback? onRotate;
+
+  @override
+  State<_VideoControls> createState() => _VideoControlsState();
+}
+
+class _VideoControlsState extends State<_VideoControls> {
+  Timer? _flashTimer;
+  bool _flashVisible = false;
+  bool _flashForward = true;
+
+  VideoPlayerController get _c => widget.controller;
+
+  @override
+  void dispose() {
+    _flashTimer?.cancel();
+    super.dispose();
+  }
+
+  void _togglePlay() {
+    if (_c.value.isPlaying) {
+      _c.pause();
+    } else {
+      _c.play();
+    }
+    setState(() {});
+  }
+
+  void _seekBy(int seconds) {
+    final duration = _c.value.duration;
+    var target = _c.value.position + Duration(seconds: seconds);
+    if (target < Duration.zero) target = Duration.zero;
+    if (target > duration) target = duration;
+    _c.seekTo(target);
+    _flashTimer?.cancel();
+    setState(() {
+      _flashForward = seconds > 0;
+      _flashVisible = true;
+    });
+    _flashTimer = Timer(const Duration(milliseconds: 600), () {
+      if (mounted) setState(() => _flashVisible = false);
+    });
+  }
+
+  static String _fmt(Duration d) {
+    final total = d.inSeconds;
+    final h = total ~/ 3600;
+    final m = (total % 3600) ~/ 60;
+    final s = total % 60;
+    final mm = m.toString().padLeft(2, '0');
+    final ss = s.toString().padLeft(2, '0');
+    return h > 0 ? '$h:$mm:$ss' : '$mm:$ss';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Stack(
+      alignment: Alignment.center,
+      children: [
+        Center(
+          child: AspectRatio(
+            aspectRatio: _c.value.aspectRatio,
+            child: VideoPlayer(_c),
+          ),
+        ),
+        // Left / right double-tap seek zones (single tap toggles play).
+        Positioned.fill(
+          child: Row(
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: _togglePlay,
+                  onDoubleTap: () => _seekBy(-10),
+                ),
+              ),
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: _togglePlay,
+                  onDoubleTap: () => _seekBy(10),
+                ),
+              ),
+            ],
+          ),
+        ),
+        ValueListenableBuilder<VideoPlayerValue>(
+          valueListenable: _c,
+          builder: (context, value, _) {
+            if (value.isPlaying) return const SizedBox.shrink();
+            return const IgnorePointer(
+              child: Icon(Icons.play_circle_fill,
+                  size: 64, color: Colors.white70),
+            );
+          },
+        ),
+        if (_flashVisible)
+          Align(
+            alignment:
+                _flashForward ? Alignment.centerRight : Alignment.centerLeft,
+            child: IgnorePointer(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 48),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _flashForward ? Icons.forward_10 : Icons.replay_10,
+                      color: Colors.white,
+                      size: 44,
+                    ),
+                    const SizedBox(height: 4),
+                    const Text('10 秒',
+                        style: TextStyle(color: Colors.white, fontSize: 13)),
+                  ],
+                ),
+              ),
             ),
           ),
-          if (!c.value.isPlaying)
-            const Icon(Icons.play_circle_fill,
-                size: 64, color: Colors.white70),
-          Positioned(
-            left: 0,
-            right: 0,
-            bottom: 0,
-            child: VideoProgressIndicator(
-              c,
-              allowScrubbing: true,
-              padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-            ),
-          ),
-        ],
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: _bottomBar(),
+        ),
+      ],
+    );
+  }
+
+  Widget _bottomBar() {
+    return Container(
+      padding: EdgeInsets.only(
+        left: 8,
+        right: 8,
+        bottom: widget.fullscreen ? 16 : 4,
+      ),
+      decoration: const BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Colors.transparent, Colors.black54],
+        ),
+      ),
+      child: ValueListenableBuilder<VideoPlayerValue>(
+        valueListenable: _c,
+        builder: (context, value, _) {
+          return Row(
+            children: [
+              IconButton(
+                icon: Icon(
+                  value.isPlaying ? Icons.pause : Icons.play_arrow,
+                  color: Colors.white,
+                ),
+                onPressed: _togglePlay,
+              ),
+              Text(
+                _fmt(value.position),
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: VideoProgressIndicator(
+                    _c,
+                    allowScrubbing: true,
+                    padding: const EdgeInsets.symmetric(vertical: 12),
+                  ),
+                ),
+              ),
+              Text(
+                _fmt(value.duration),
+                style: const TextStyle(color: Colors.white, fontSize: 12),
+              ),
+              if (widget.onRotate != null)
+                IconButton(
+                  icon: const Icon(Icons.screen_rotation, color: Colors.white),
+                  tooltip: '旋轉螢幕',
+                  onPressed: widget.onRotate,
+                ),
+              if (widget.onToggleFullscreen != null)
+                IconButton(
+                  icon: Icon(
+                    widget.fullscreen
+                        ? Icons.fullscreen_exit
+                        : Icons.fullscreen,
+                    color: Colors.white,
+                  ),
+                  tooltip: widget.fullscreen ? '退出全螢幕' : '全螢幕',
+                  onPressed: widget.onToggleFullscreen,
+                ),
+            ],
+          );
+        },
       ),
     );
   }
