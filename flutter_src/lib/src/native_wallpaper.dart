@@ -92,6 +92,10 @@ class NativeWallpaper {
     });
   }
 
+  static Future<String> liveWallpaperError() async {
+    return await _channel.invokeMethod<String>('liveWallpaperError') ?? '';
+  }
+
   /// Opens the system "choose live wallpaper" preview for our service. The user
   /// must confirm there (the app cannot set a live wallpaper silently).
   static Future<void> openLiveWallpaperPreview() async {
