@@ -134,7 +134,7 @@ AppBar selectionAppBar({
             messenger.showSnackBar(SnackBar(
               content: Text(added > 0
                   ? '已加入 $added 筆到$label輪播'
-                  : '沒有可加入的圖片（不支援影片或已在清單中）'),
+                  : '沒有可加入的圖片或影片（格式不支援或已在清單中）'),
               action: added > 0
                   ? SnackBarAction(
                       label: '檢視',
