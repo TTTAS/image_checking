@@ -91,7 +91,13 @@ class PlaylistWallpaperService : WallpaperService() {
 
         override fun onCreate(surfaceHolder: SurfaceHolder) {
             super.onCreate(surfaceHolder)
+            recordStatus("Engine 建立；系統預覽=$isPreview")
             loadManifest()
+        }
+
+        override fun onSurfaceCreated(holder: SurfaceHolder) {
+            super.onSurfaceCreated(holder)
+            recordStatus("Surface 建立；有效=${holder.surface.isValid}")
         }
 
         override fun onSurfaceChanged(
@@ -103,6 +109,7 @@ class PlaylistWallpaperService : WallpaperService() {
             stopAll()
             surfaceW = width
             surfaceH = height
+            recordStatus("Surface 尺寸 ${width}x${height}；可見=$visible")
             if (renderer == null && holder.surface.isValid) {
                 try {
                     renderer = WallpaperRenderer(holder.surface)
@@ -119,6 +126,7 @@ class PlaylistWallpaperService : WallpaperService() {
 
         override fun onVisibilityChanged(v: Boolean) {
             visible = v
+            recordStatus("可見狀態=$v")
             if (v) {
                 // A live wallpaper Engine is commonly reused across multiple
                 // apply operations; its old file paths may no longer exist.
@@ -184,6 +192,7 @@ class PlaylistWallpaperService : WallpaperService() {
                 )
                 parseItems(root.optJSONArray("lockItems"), lockItems)
                 selectTargetList()
+                recordStatus("載入清單：主畫面 ${homeItems.size}、鎖定 ${lockItems.size}、本引擎 ${items.size}")
                 Log.i(
                     tag,
                     "loaded home=${homeItems.size} lock=${lockItems.size} seconds=$seconds",
@@ -221,9 +230,21 @@ class PlaylistWallpaperService : WallpaperService() {
             if (pos !in order.indices) pos = 0
         }
 
+        private fun recordStatus(message: String) {
+            try {
+                synchronized(PlaylistWallpaperService::class.java) {
+                    val file = File(filesDir, "wallpaper_live_status.txt")
+                    val previous = if (file.exists()) file.readLines().takeLast(39) else emptyList()
+                    file.writeText((previous + "${java.util.Date()} [${hashCode()}] $message")
+                        .joinToString("\n"))
+                }
+            } catch (_: Exception) { }
+        }
+
         private fun reportError(message: String, error: Exception? = null) {
             val detail = if (error == null) message else "$message：${error.message}"
             Log.e(tag, detail, error)
+            recordStatus(detail)
             try {
                 File(filesDir, "wallpaper_live_error.txt").writeText(
                     "${java.util.Date()}\n$detail\n" + (error?.stackTraceToString() ?: ""))
@@ -328,6 +349,7 @@ class PlaylistWallpaperService : WallpaperService() {
                 }
             }
             firstVideoFrame = false
+            recordStatus("開始準備影片：${file.name}，${file.length()} bytes")
             val generation = playbackGeneration
             val mediaPlayer = MediaPlayer()
             player = mediaPlayer
@@ -340,7 +362,7 @@ class PlaylistWallpaperService : WallpaperService() {
                             firstVideoFrame = true
                             handler.removeCallbacks(videoTimeout)
                             handler.postDelayed(nextItem, seconds * 1000L)
-                            Log.i(tag, "first video frame rendered: ${file.name}")
+                            recordStatus("已繪出影片第一幀：${file.name}")
                         }
                     } catch (e: Exception) {
                         reportError("影片畫面輸出失敗：${file.name}", e)
@@ -365,6 +387,7 @@ class PlaylistWallpaperService : WallpaperService() {
                     try {
                         computeTransform(item, current.videoWidth.coerceAtLeast(1),
                             current.videoHeight.coerceAtLeast(1))
+                        recordStatus("影片已解碼：${current.videoWidth}x${current.videoHeight}，等待繪製")
                         current.start()
                     } catch (e: Exception) {
                         reportError("啟動影片失敗：${file.name}", e)

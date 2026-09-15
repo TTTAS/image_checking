@@ -119,6 +119,14 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "openLiveWallpaperPreview" -> openLiveWallpaperPreview(result)
+                    "liveWallpaperDiagnostics" -> {
+                        val errorFile = File(filesDir, "wallpaper_live_error.txt")
+                        val statusFile = File(filesDir, "wallpaper_live_status.txt")
+                        val device = "${Build.MANUFACTURER} ${Build.MODEL} / Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})"
+                        val error = if (errorFile.exists()) errorFile.readText() else "尚未記錄錯誤"
+                        val status = if (statusFile.exists()) statusFile.readText() else "尚未記錄桌布引擎活動"
+                        result.success("$device\n\n$error\n\n$status")
+                    }
                     "liveWallpaperError" -> {
                         val errorFile = File(filesDir, "wallpaper_live_error.txt")
                         result.success(if (errorFile.exists()) errorFile.readText() else "")
@@ -388,3 +396,4 @@ class MainActivity : FlutterActivity() {
         }
     }
 }
+

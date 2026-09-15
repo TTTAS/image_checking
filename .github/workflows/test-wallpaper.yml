@@ -2,8 +2,6 @@ name: Test wallpaper rendering
 on:
   push:
     branches: [codex/video-wallpaper-playlists]
-  pull_request:
-    paths: ['flutter_src/native/**', 'native_tests/**', '.github/workflows/test-wallpaper.yml']
   workflow_dispatch:
 permissions:
   contents: read

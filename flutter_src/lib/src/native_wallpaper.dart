@@ -92,6 +92,10 @@ class NativeWallpaper {
     });
   }
 
+  static Future<String> liveWallpaperDiagnostics() async {
+    return await _channel.invokeMethod<String>('liveWallpaperDiagnostics') ?? '';
+  }
+
   static Future<String> liveWallpaperError() async {
     return await _channel.invokeMethod<String>('liveWallpaperError') ?? '';
   }
@@ -102,3 +106,4 @@ class NativeWallpaper {
     await _channel.invokeMethod<bool>('openLiveWallpaperPreview');
   }
 }
+

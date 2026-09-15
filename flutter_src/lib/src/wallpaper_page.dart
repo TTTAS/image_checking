@@ -55,7 +55,7 @@ class _WallpaperPageState extends State<WallpaperPage>
   Future<void> _openDiagnostics() async {
     String message;
     try {
-      message = await NativeWallpaper.liveWallpaperError();
+      message = await NativeWallpaper.liveWallpaperDiagnostics();
       if (message.isEmpty) message = '尚未記錄播放錯誤。請套用輪播後再查看。';
     } catch (e) {
       message = '無法讀取播放診斷：$e';
