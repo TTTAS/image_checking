@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.util.DisplayMetrics
 import android.view.WindowManager
@@ -78,13 +79,43 @@ object WallpaperStore {
                 } catch (_: Exception) {
                     continue
                 }
+                val isVideo = (item["video"] as? Boolean) ?: false
+                var fallbackPath = ""
+                if (isVideo) {
+                    val fallback = File(dir, "${sanitize(id)}_preview.jpg")
+                    try {
+                        val retriever = MediaMetadataRetriever()
+                        try {
+                            retriever.setDataSource(dst.absolutePath)
+                            val frame = retriever.getFrameAtTime(
+                                0,
+                                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                            )
+                            if (frame != null) {
+                                fallback.outputStream().use {
+                                    output -> frame.compress(
+                                        Bitmap.CompressFormat.JPEG,
+                                        90,
+                                        output,
+                                    )
+                                }
+                                frame.recycle()
+                                fallbackPath = fallback.absolutePath
+                            }
+                        } finally {
+                            retriever.release()
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
                 arr.put(JSONObject().apply {
                     put("path", dst.absolutePath)
+                    put("fallbackPath", fallbackPath)
                     put("zoom", (item["zoom"] as? Number)?.toDouble() ?: 0.0)
                     put("focusX", (item["focusX"] as? Number)?.toDouble() ?: 0.5)
                     put("focusY", (item["focusY"] as? Number)?.toDouble() ?: 0.5)
                     put("animated", (item["animated"] as? Boolean) ?: false)
-                    put("video", (item["video"] as? Boolean) ?: false)
+                    put("video", isVideo)
                 })
             }
             return arr
