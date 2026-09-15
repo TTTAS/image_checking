@@ -105,14 +105,17 @@ class MainActivity : FlutterActivity() {
                         applyRotation(home, lock, shuffle, interval, result)
                     }
                     "applyLive" -> {
-                        val items = call.argument<List<Map<String, Any?>>>("items")
+                        val homeItems =
+                            call.argument<List<Map<String, Any?>>>("homeItems") ?: emptyList()
+                        val lockItems =
+                            call.argument<List<Map<String, Any?>>>("lockItems") ?: emptyList()
                         val seconds = call.argument<Int>("seconds") ?: 30
                         val loops = call.argument<Int>("loops") ?: 1
                         val shuffle = call.argument<Boolean>("shuffle") ?: false
-                        if (items == null) {
-                            result.error("ARGS", "items required", null)
+                        if (homeItems.isEmpty() && lockItems.isEmpty()) {
+                            result.error("ARGS", "homeItems / lockItems required", null)
                         } else {
-                            applyLive(items, seconds, loops, shuffle, result)
+                            applyLive(homeItems, lockItems, seconds, loops, shuffle, result)
                         }
                     }
                     "openLiveWallpaperPreview" -> openLiveWallpaperPreview(result)
@@ -308,7 +311,8 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun applyLive(
-        items: List<Map<String, Any?>>,
+        homeItems: List<Map<String, Any?>>,
+        lockItems: List<Map<String, Any?>>,
         seconds: Int,
         loops: Int,
         shuffle: Boolean,
@@ -316,7 +320,14 @@ class MainActivity : FlutterActivity() {
     ) {
         Thread {
             try {
-                val n = WallpaperStore.applyLive(applicationContext, items, seconds, loops, shuffle)
+                val n = WallpaperStore.applyLive(
+                    applicationContext,
+                    homeItems,
+                    lockItems,
+                    seconds,
+                    loops,
+                    shuffle,
+                )
                 if (n == 0) {
                     runOnUiThread { result.error("EMPTY", "沒有可用的動態圖片", null) }
                 } else {
