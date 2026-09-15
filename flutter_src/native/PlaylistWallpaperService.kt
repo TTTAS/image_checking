@@ -273,8 +273,8 @@ class PlaylistWallpaperService : WallpaperService() {
             mediaPlayer.setSurface(surfaceHolder.surface)
             mediaPlayer.setVolume(0f, 0f)
             mediaPlayer.isLooping = true
-            mediaPlayer.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT)
             mediaPlayer.setOnPreparedListener {
+                it.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT)
                 if (visible && player === it) it.start()
             }
             mediaPlayer.setOnErrorListener { _, what, extra ->
