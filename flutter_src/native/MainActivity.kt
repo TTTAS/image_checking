@@ -119,6 +119,10 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                     "openLiveWallpaperPreview" -> openLiveWallpaperPreview(result)
+                    "liveWallpaperError" -> {
+                        val errorFile = File(filesDir, "wallpaper_live_error.txt")
+                        result.success(if (errorFile.exists()) errorFile.readText() else "")
+                    }
                     "cancelWallpaperWork" -> {
                         try {
                             WorkManager.getInstance(applicationContext)
