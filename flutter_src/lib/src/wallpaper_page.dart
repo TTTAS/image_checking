@@ -17,12 +17,40 @@ class WallpaperPage extends StatefulWidget {
   State<WallpaperPage> createState() => _WallpaperPageState();
 }
 
-class _WallpaperPageState extends State<WallpaperPage> {
+class _WallpaperPageState extends State<WallpaperPage>
+    with WidgetsBindingObserver {
   final Map<String, Future<AssetEntity?>> _assetCache = {};
   late WallpaperTarget _tab = widget.initialTarget;
 
   Future<AssetEntity?> _asset(String id) =>
       _assetCache[id] ??= AssetEntity.fromId(id);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _showPlaybackError();
+  }
+
+  Future<void> _showPlaybackError() async {
+    try {
+      final message = await NativeWallpaper.liveWallpaperError();
+      if (!mounted || message.isEmpty) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), duration: const Duration(seconds: 8)),
+      );
+    } catch (_) {}
+  }
 
   Future<void> _openCrop(WallpaperTarget target, WallpaperItem item) async {
     final navigator = Navigator.of(context);
