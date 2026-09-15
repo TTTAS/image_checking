@@ -21,6 +21,10 @@ const Set<String> kWallpaperMimes = {
   'image/png',
   'image/webp',
   'image/gif',
+  'video/mp4',
+  'video/quicktime',
+  'video/x-m4v',
+  'video/webm',
 };
 
 class WallpaperItem {
@@ -43,6 +47,7 @@ class WallpaperItem {
   double cropFocusY;
 
   bool get cropped => filePath.isNotEmpty;
+  bool get isVideo => mime.toLowerCase().startsWith('video/');
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -180,8 +185,12 @@ class WallpaperPlaylist {
   }
 
   static bool accepts(AssetEntity asset) {
-    if (asset.type != AssetType.image) return false;
-    return kWallpaperMimes.contains(_mimeOf(asset));
+    if (asset.type != AssetType.image && asset.type != AssetType.video) {
+      return false;
+    }
+    final mime = _mimeOf(asset);
+    return kWallpaperMimes.contains(mime) ||
+        (asset.type == AssetType.video && mime.startsWith('video/'));
   }
 
   static bool contains(WallpaperTarget t, String id) =>
@@ -289,6 +298,12 @@ class WallpaperPlaylist {
     final m = asset.mimeType?.toLowerCase();
     if (m != null && m.isNotEmpty) return m;
     final name = (asset.title ?? '').toLowerCase();
+    if (asset.type == AssetType.video) {
+      if (name.endsWith('.mov')) return 'video/quicktime';
+      if (name.endsWith('.m4v')) return 'video/x-m4v';
+      if (name.endsWith('.webm')) return 'video/webm';
+      return 'video/mp4';
+    }
     if (name.endsWith('.gif')) return 'image/gif';
     if (name.endsWith('.webp')) return 'image/webp';
     if (name.endsWith('.png')) return 'image/png';
@@ -298,6 +313,6 @@ class WallpaperPlaylist {
 
   static bool _looksAnimated(String mime) {
     final m = mime.toLowerCase();
-    return m.contains('gif') || m.contains('webp');
+    return m.contains('gif') || m.contains('webp') || m.startsWith('video/');
   }
 }
