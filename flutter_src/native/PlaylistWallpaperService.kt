@@ -34,6 +34,7 @@ class PlaylistWallpaperService : WallpaperService() {
         val fy: Float,
         val animated: Boolean,
         val video: Boolean,
+        val fallbackPath: String,
     )
 
     override fun onCreateEngine(): Engine = PlaylistEngine()
@@ -127,6 +128,7 @@ class PlaylistWallpaperService : WallpaperService() {
                         fy = o.optDouble("focusY", 0.5).toFloat(),
                         animated = o.optBoolean("animated", false),
                         video = o.optBoolean("video", false),
+                        fallbackPath = o.optString("fallbackPath", ""),
                     )
                 )
             }
@@ -233,7 +235,7 @@ class PlaylistWallpaperService : WallpaperService() {
             }
             try {
                 when {
-                    item.video || looksVideo(file) -> playVideo(file)
+                    item.video || looksVideo(file) -> playVideo(file, item)
                     (item.animated || looksAnimated(file)) &&
                         tryPlayGifMovie(file, item) -> Unit
                     (item.animated || looksAnimated(file)) &&
@@ -265,21 +267,36 @@ class PlaylistWallpaperService : WallpaperService() {
             return n.endsWith(".gif") || n.endsWith(".webp")
         }
 
-        private fun playVideo(file: File) {
-            clearBlack()
+        private fun playVideo(file: File, item: Item) {
+            val fallback = item.fallbackPath.takeIf { it.isNotEmpty() }?.let(::File)
+            if (fallback?.exists() == true) {
+                still = decodeScaled(fallback, maxOf(surfaceW, surfaceH))
+                still?.let {
+                    computeTransform(item, it.width, it.height)
+                    drawFrame()
+                }
+            } else {
+                clearBlack()
+            }
             val mediaPlayer = MediaPlayer()
             player = mediaPlayer
             mediaPlayer.setDataSource(file.absolutePath)
-            mediaPlayer.setSurface(surfaceHolder.surface)
+            mediaPlayer.setDisplay(surfaceHolder)
             mediaPlayer.setVolume(0f, 0f)
             mediaPlayer.isLooping = true
             mediaPlayer.setOnPreparedListener {
                 it.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT)
                 if (visible && player === it) it.start()
             }
-            mediaPlayer.setOnErrorListener { _, what, extra ->
-                Log.w(tag, "video error what=$what extra=$extra file=${file.name}")
-                handler.post { advance() }
+            mediaPlayer.setOnErrorListener { failed, what, extra ->
+                Log.e(tag, "video error what=$what extra=$extra file=${file.name}")
+                try {
+                    failed.release()
+                } catch (_: Exception) {
+                }
+                if (player === failed) player = null
+                // Keep the extracted preview frame visible until this item's
+                // normal interval elapses instead of leaving a black screen.
                 true
             }
             mediaPlayer.prepareAsync()
