@@ -262,12 +262,19 @@ class _ViewerPageState extends State<ViewerPage> {
                   label: '最愛',
                   onTap: () => AppCollections.toggleFavorite(id),
                 ),
-                if (_current.type != AssetType.video)
-                  _action(
-                    icon: Icons.tune,
-                    label: '編輯',
-                    onTap: () => PhotoActions.openEditor(context, _current),
-                  ),
+                _action(
+                  icon: Icons.tune,
+                  label: '編輯',
+                  onTap: () {
+                    if (_current.type == AssetType.video) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('影片編輯目前不支援')),
+                      );
+                    } else {
+                      PhotoActions.openEditor(context, _current);
+                    }
+                  },
+                ),
                 _action(
                   icon: Icons.share_outlined,
                   label: '分享',
