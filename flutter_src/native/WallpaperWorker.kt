@@ -58,6 +58,10 @@ object WallpaperStore {
         loops: Int,
         shuffle: Boolean,
     ): Int {
+        try {
+            File(context.filesDir, "wallpaper_live_error.txt").delete()
+        } catch (_: Exception) {
+        }
         fun copyItems(side: String, items: List<Map<String, Any?>>): JSONArray {
             val dir = File(context.filesDir, "wallpaper_live/$side")
                 .apply { if (!exists()) mkdirs() }
