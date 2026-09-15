@@ -5,6 +5,7 @@ import 'package:photo_manager/photo_manager.dart';
 import 'native_wallpaper.dart';
 import 'wallpaper_crop_page.dart';
 import 'wallpaper_playlist.dart';
+import 'wallpaper_video_crop_page.dart';
 import 'widgets.dart';
 
 class WallpaperPage extends StatefulWidget {
@@ -32,9 +33,13 @@ class _WallpaperPageState extends State<WallpaperPage> {
       return;
     }
     if (asset.type == AssetType.video || item.isVideo) {
-      messenger.showSnackBar(
-        const SnackBar(content: Text('影片會以完整畫面置中播放，不需要裁切')),
-      );
+      navigator.push(MaterialPageRoute<void>(
+        builder: (_) => WallpaperVideoCropPage(
+          asset: asset,
+          target: target,
+          initialZoom: item.cropZoom,
+        ),
+      ));
       return;
     }
     navigator.push(MaterialPageRoute<void>(
@@ -141,12 +146,12 @@ class _WallpaperPageState extends State<WallpaperPage> {
         List<WallpaperItem> source) async {
       final items = <Map<String, dynamic>>[];
       for (final it in source) {
-      try {
-        final asset = await _asset(it.id);
-        if (asset == null) continue;
-        var file = await asset.originFile;
-        file ??= await asset.file;
-        if (file == null) continue;
+        try {
+          final asset = await _asset(it.id);
+          if (asset == null) continue;
+          var file = await asset.originFile;
+          file ??= await asset.file;
+          if (file == null) continue;
           items.add({
             'srcPath': file.path,
             'id': it.id,
