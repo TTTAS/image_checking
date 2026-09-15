@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.media.MediaMetadataRetriever
 import android.os.Build
 import android.util.DisplayMetrics
 import android.view.WindowManager
@@ -51,46 +52,90 @@ object WallpaperStore {
 
     fun applyLive(
         context: Context,
-        items: List<Map<String, Any?>>,
+        homeItems: List<Map<String, Any?>>,
+        lockItems: List<Map<String, Any?>>,
         seconds: Int,
         loops: Int,
         shuffle: Boolean,
     ): Int {
-        val dir = File(context.filesDir, "wallpaper_live/home")
-            .apply { if (!exists()) mkdirs() }
-        dir.listFiles()?.forEach { it.delete() }
-
-        val arr = JSONArray()
-        for (it in items) {
-            val src = it["srcPath"] as? String ?: continue
-            val id = it["id"] as? String ?: continue
-            val ext = (it["ext"] as? String).let { e -> if (e.isNullOrEmpty()) "img" else e }
-            val from = File(src)
-            if (!from.exists()) continue
-            val dst = File(dir, "${sanitize(id)}.$ext")
-            try {
-                from.inputStream().use { input ->
-                    dst.outputStream().use { output -> input.copyTo(output) }
-                }
-            } catch (_: Exception) {
-                continue
-            }
-            arr.put(JSONObject().apply {
-                put("path", dst.absolutePath)
-                put("zoom", (it["zoom"] as? Number)?.toDouble() ?: 0.0)
-                put("focusX", (it["focusX"] as? Number)?.toDouble() ?: 0.5)
-                put("focusY", (it["focusY"] as? Number)?.toDouble() ?: 0.5)
-                put("animated", (it["animated"] as? Boolean) ?: false)
-            })
+        try {
+            File(context.filesDir, "wallpaper_live_error.txt").delete()
+        } catch (_: Exception) {
         }
+        fun copyItems(side: String, items: List<Map<String, Any?>>): JSONArray {
+            val dir = File(context.filesDir, "wallpaper_live/$side")
+                .apply { if (!exists()) mkdirs() }
+            dir.listFiles()?.forEach { it.delete() }
+
+            val arr = JSONArray()
+            for (item in items) {
+                val src = item["srcPath"] as? String ?: continue
+                val id = item["id"] as? String ?: continue
+                val ext = (item["ext"] as? String)
+                    .let { e -> if (e.isNullOrEmpty()) "img" else e }
+                val from = File(src)
+                if (!from.exists()) continue
+                val dst = File(dir, "${sanitize(id)}.$ext")
+                try {
+                    from.inputStream().use { input ->
+                        dst.outputStream().use { output -> input.copyTo(output) }
+                    }
+                } catch (_: Exception) {
+                    continue
+                }
+                val isVideo = (item["video"] as? Boolean) ?: false
+                var fallbackPath = ""
+                if (isVideo) {
+                    val fallback = File(dir, "${sanitize(id)}_preview.jpg")
+                    try {
+                        val retriever = MediaMetadataRetriever()
+                        try {
+                            retriever.setDataSource(dst.absolutePath)
+                            val frame = retriever.getFrameAtTime(
+                                0,
+                                MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                            )
+                            if (frame != null) {
+                                fallback.outputStream().use {
+                                    output -> frame.compress(
+                                        Bitmap.CompressFormat.JPEG,
+                                        90,
+                                        output,
+                                    )
+                                }
+                                frame.recycle()
+                                fallbackPath = fallback.absolutePath
+                            }
+                        } finally {
+                            retriever.release()
+                        }
+                    } catch (_: Exception) {
+                    }
+                }
+                arr.put(JSONObject().apply {
+                    put("path", dst.absolutePath)
+                    put("fallbackPath", fallbackPath)
+                    put("zoom", (item["zoom"] as? Number)?.toDouble() ?: 0.0)
+                    put("focusX", (item["focusX"] as? Number)?.toDouble() ?: 0.5)
+                    put("focusY", (item["focusY"] as? Number)?.toDouble() ?: 0.5)
+                    put("animated", (item["animated"] as? Boolean) ?: false)
+                    put("video", isVideo)
+                })
+            }
+            return arr
+        }
+
+        val home = copyItems("home", homeItems)
+        val lock = copyItems("lock", lockItems)
         val root = JSONObject().apply {
-            put("items", arr)
+            put("homeItems", home)
+            put("lockItems", lock)
             put("seconds", seconds)
             put("loops", loops)
             put("shuffle", shuffle)
         }
         File(context.filesDir, "wallpaper_live.json").writeText(root.toString())
-        return arr.length()
+        return home.length() + lock.length()
     }
 
     fun applyRotation(

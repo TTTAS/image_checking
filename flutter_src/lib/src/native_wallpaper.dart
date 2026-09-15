@@ -77,17 +77,27 @@ class NativeWallpaper {
   /// Does NOT set the wallpaper — call [openLiveWallpaperPreview] after.
   /// Throws [PlatformException] on failure.
   static Future<void> applyLive({
-    required List<Map<String, dynamic>> items,
+    required List<Map<String, dynamic>> homeItems,
+    required List<Map<String, dynamic>> lockItems,
     required int liveSeconds,
     required int loops,
     required bool shuffle,
   }) async {
     await _channel.invokeMethod<int>('applyLive', {
-      'items': items,
+      'homeItems': homeItems,
+      'lockItems': lockItems,
       'seconds': liveSeconds,
       'loops': loops,
       'shuffle': shuffle,
     });
+  }
+
+  static Future<String> liveWallpaperDiagnostics() async {
+    return await _channel.invokeMethod<String>('liveWallpaperDiagnostics') ?? '';
+  }
+
+  static Future<String> liveWallpaperError() async {
+    return await _channel.invokeMethod<String>('liveWallpaperError') ?? '';
   }
 
   /// Opens the system "choose live wallpaper" preview for our service. The user
@@ -96,3 +106,4 @@ class NativeWallpaper {
     await _channel.invokeMethod<bool>('openLiveWallpaperPreview');
   }
 }
+

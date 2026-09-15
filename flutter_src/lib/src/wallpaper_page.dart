@@ -5,6 +5,7 @@ import 'package:photo_manager/photo_manager.dart';
 import 'native_wallpaper.dart';
 import 'wallpaper_crop_page.dart';
 import 'wallpaper_playlist.dart';
+import 'wallpaper_video_crop_page.dart';
 import 'widgets.dart';
 
 class WallpaperPage extends StatefulWidget {
@@ -16,12 +17,69 @@ class WallpaperPage extends StatefulWidget {
   State<WallpaperPage> createState() => _WallpaperPageState();
 }
 
-class _WallpaperPageState extends State<WallpaperPage> {
+class _WallpaperPageState extends State<WallpaperPage>
+    with WidgetsBindingObserver {
   final Map<String, Future<AssetEntity?>> _assetCache = {};
   late WallpaperTarget _tab = widget.initialTarget;
 
   Future<AssetEntity?> _asset(String id) =>
       _assetCache[id] ??= AssetEntity.fromId(id);
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _showPlaybackError();
+  }
+
+  Future<void> _showPlaybackError() async {
+    try {
+      final message = await NativeWallpaper.liveWallpaperError();
+      if (!mounted || message.isEmpty) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(message), duration: const Duration(seconds: 8)),
+      );
+    } catch (_) {}
+  }
+
+  Future<void> _openDiagnostics() async {
+    String message;
+    try {
+      message = await NativeWallpaper.liveWallpaperDiagnostics();
+      if (message.isEmpty) message = '尚未記錄播放錯誤。請套用輪播後再查看。';
+    } catch (e) {
+      message = '無法讀取播放診斷：$e';
+    }
+    if (!mounted) return;
+    final details = '版本 1.0.9+10\n$message';
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('播放診斷'),
+        content: SingleChildScrollView(child: SelectableText(details)),
+        actions: [
+          TextButton(
+            onPressed: () => Clipboard.setData(ClipboardData(text: details)),
+            child: const Text('複製'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('關閉'),
+          ),
+        ],
+      ),
+    );
+  }
 
   Future<void> _openCrop(WallpaperTarget target, WallpaperItem item) async {
     final navigator = Navigator.of(context);
@@ -29,6 +87,16 @@ class _WallpaperPageState extends State<WallpaperPage> {
     final asset = await _asset(item.id);
     if (asset == null) {
       messenger.showSnackBar(const SnackBar(content: Text('找不到原始圖片')));
+      return;
+    }
+    if (asset.type == AssetType.video || item.isVideo) {
+      navigator.push(MaterialPageRoute<void>(
+        builder: (_) => WallpaperVideoCropPage(
+          asset: asset,
+          target: target,
+          initialZoom: item.cropZoom,
+        ),
+      ));
       return;
     }
     navigator.push(MaterialPageRoute<void>(
@@ -65,8 +133,14 @@ class _WallpaperPageState extends State<WallpaperPage> {
 
   bool _looksAnimated(WallpaperItem it) {
     final m = it.mime.toLowerCase();
-    return it.animated || m.contains('gif') || m.contains('webp');
+    return it.animated ||
+        m.contains('gif') ||
+        m.contains('webp') ||
+        m.startsWith('video/');
   }
+
+  bool _hasLiveItems(List<WallpaperItem> items) =>
+      items.any(_looksAnimated);
 
   Future<void> _apply() async {
     final home = WallpaperPlaylist.homeItems.value;
@@ -76,9 +150,8 @@ class _WallpaperPageState extends State<WallpaperPage> {
           const SnackBar(content: Text('兩個清單都是空的，先加入圖片')));
       return;
     }
-    if (home.isNotEmpty) {
+    if (home.isNotEmpty || _hasLiveItems(lock)) {
       await _applyLive();
-      if (lock.isNotEmpty) await _applyLockOnly();
     } else {
       await _applyStatic();
     }
@@ -106,6 +179,10 @@ class _WallpaperPageState extends State<WallpaperPage> {
 
   static String _extFor(String mime, String path) {
     final m = mime.toLowerCase();
+    if (m.contains('mp4')) return 'mp4';
+    if (m.contains('quicktime')) return 'mov';
+    if (m.contains('m4v')) return 'm4v';
+    if (m.contains('webm')) return 'webm';
     if (m.contains('gif')) return 'gif';
     if (m.contains('webp')) return 'webp';
     if (m.contains('png')) return 'png';
@@ -119,32 +196,37 @@ class _WallpaperPageState extends State<WallpaperPage> {
     final messenger = ScaffoldMessenger.of(context);
     final s = WallpaperPlaylist.settings.value;
     final home = WallpaperPlaylist.homeItems.value;
-    if (home.isEmpty) {
-      messenger.showSnackBar(
-          const SnackBar(content: Text('主畫面清單是空的')));
-      return;
-    }
+    final lock = WallpaperPlaylist.lockItems.value;
     messenger.showSnackBar(const SnackBar(content: Text('準備中…')));
-    final items = <Map<String, dynamic>>[];
-    for (final it in home) {
-      try {
-        final asset = await _asset(it.id);
-        if (asset == null) continue;
-        var file = await asset.originFile;
-        file ??= await asset.file;
-        if (file == null) continue;
-        items.add({
-          'srcPath': file.path,
-          'id': it.id,
-          'ext': _extFor(it.mime, file.path),
-          'zoom': it.cropZoom,
-          'focusX': it.cropFocusX,
-          'focusY': it.cropFocusY,
-          'animated': _looksAnimated(it),
-        });
-      } catch (_) {}
+
+    Future<List<Map<String, dynamic>>> resolve(
+        List<WallpaperItem> source) async {
+      final items = <Map<String, dynamic>>[];
+      for (final it in source) {
+        try {
+          final asset = await _asset(it.id);
+          if (asset == null) continue;
+          var file = await asset.originFile;
+          file ??= await asset.file;
+          if (file == null) continue;
+          items.add({
+            'srcPath': file.path,
+            'id': it.id,
+            'ext': _extFor(it.mime, file.path),
+            'zoom': it.cropZoom,
+            'focusX': it.cropFocusX,
+            'focusY': it.cropFocusY,
+            'animated': _looksAnimated(it),
+            'video': asset.type == AssetType.video || it.isVideo,
+          });
+        } catch (_) {}
+      }
+      return items;
     }
-    if (items.isEmpty) {
+
+    final homeItems = await resolve(home);
+    final lockItems = await resolve(lock);
+    if (homeItems.isEmpty && lockItems.isEmpty) {
       messenger.showSnackBar(
           const SnackBar(content: Text('找不到可用的圖片檔')));
       return;
@@ -152,7 +234,8 @@ class _WallpaperPageState extends State<WallpaperPage> {
     try {
       final secs = s.liveSeconds <= 0 ? 30 : s.liveSeconds;
       await NativeWallpaper.applyLive(
-        items: items,
+        homeItems: homeItems,
+        lockItems: lockItems,
         liveSeconds: secs,
         loops: s.loopsBeforeNext,
         shuffle: s.shuffle,
@@ -160,7 +243,7 @@ class _WallpaperPageState extends State<WallpaperPage> {
       await NativeWallpaper.openLiveWallpaperPreview();
       if (!mounted) return;
       messenger.showSnackBar(SnackBar(
-        content: Text('請在系統預覽按「設定」。設好後主畫面每 $secs 秒換下一張。'),
+        content: Text('請在系統預覽按「設定」，並選擇主畫面或主畫面與鎖定畫面；每 $secs 秒換下一項。'),
       ));
     } on PlatformException catch (e) {
       messenger.showSnackBar(
@@ -255,9 +338,11 @@ class _WallpaperPageState extends State<WallpaperPage> {
           PopupMenuButton<String>(
             onSelected: (v) {
               if (v == 'clear') _confirmClear();
+              if (v == 'diagnostics') _openDiagnostics();
             },
             itemBuilder: (context) => [
               PopupMenuItem(value: 'clear', child: Text('清空「${_tab.label}」清單')),
+              const PopupMenuItem(value: 'diagnostics', child: Text('播放診斷')),
             ],
           ),
         ],
@@ -267,8 +352,8 @@ class _WallpaperPageState extends State<WallpaperPage> {
           const Padding(
             padding: EdgeInsets.fromLTRB(12, 10, 12, 0),
             child: Text(
-              '套用主畫面會開系統「動態桌布」預覽（看起來像只編第一張，按設定即可，不是本 App 裁切頁）。'
-              '換張間隔用下面的秒數。鎖定清單仍是靜態，最短約 15 分鐘。',
+              '圖片與影片可混合輪播。套用後會開系統「動態桌布」預覽，請按設定並選擇主畫面或主畫面與鎖定畫面。'
+              '圖片與影片預設完整置中顯示，不會裁掉內容。',
               style: TextStyle(fontSize: 12),
               textAlign: TextAlign.center,
             ),
@@ -411,10 +496,14 @@ class _PlaylistTile extends StatelessWidget {
         ),
       ),
       subtitle: Text(
-        item.cropped ? '已裁切' : '未裁切（套用時會自動置中裁切）',
+        item.isVideo
+            ? '影片（完整置中）'
+            : item.cropped
+                ? '已裁切'
+                : '完整置中（可點按裁切）',
         style: TextStyle(
           fontSize: 12,
-          color: item.cropped ? Colors.green : null,
+          color: item.cropped || item.isVideo ? Colors.green : null,
         ),
       ),
       trailing: Row(
@@ -465,7 +554,7 @@ class _IntervalBar extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                '主畫面每張播多久換下一張（現在 ${_label(current)}；改完要再按套用）',
+                '每個項目播多久換下一個（現在 ${_label(current)}；改完要再按套用）',
                 style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 6),
@@ -594,3 +683,4 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     );
   }
 }
+

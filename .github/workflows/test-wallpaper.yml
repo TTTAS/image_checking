@@ -1,0 +1,136 @@
+name: Test wallpaper rendering
+on:
+  push:
+    branches: [codex/video-wallpaper-playlists]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  rendering:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+          log-accepted-android-sdk-licenses: false
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Assemble native regression app and video fixture
+        run: |
+          for name in PlaylistWallpaperService WallpaperRenderer; do
+            sed 's/__PACKAGE__/com.tttas.wallpapertest/g' "flutter_src/native/$name.kt" > "native_tests/app/src/main/java/com/tttas/wallpapertest/$name.kt"
+          done
+          sudo apt-get update -qq
+          sudo apt-get install -y ffmpeg
+          mkdir -p native_tests/app/src/androidTest/assets
+          ffmpeg -f lavfi -i testsrc2=size=320x180:rate=15 -t 4 -c:v libx264 -pix_fmt yuv420p native_tests/app/src/androidTest/assets/test.mp4
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Verify decoded frames, framing, mixed playlist, and engine recreation
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          profile: pixel_2
+          disable-animations: true
+          script: gradle -p native_tests connectedDebugAndroidTest --stacktrace
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wallpaper-rendering-results
+          path: |
+            native_tests/app/build/reports/androidTests
+            native_tests/app/build/outputs/androidTest-results
+
+  flutter_compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: temurin
+        java-version: '17'
+    - name: Set up Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        channel: stable
+        cache: true
+    - name: Assemble Flutter project from flutter_src
+      run: 'flutter create --platforms=android --project-name photoalbum --org com.tttas
+        .
+  
+        cp flutter_src/pubspec.yaml pubspec.yaml
+  
+        rm -rf lib
+  
+        cp -r flutter_src/lib lib
+  
+        if [ -d flutter_src/assets ]; then mkdir -p assets && cp -r flutter_src/assets/.
+        assets/; fi
+  
+        '
+    - name: Inject photo-library permissions
+      run: 'MANIFEST=android/app/src/main/AndroidManifest.xml
+  
+        perl -0pi -e ''s/(<manifest[^>]*>)/$1\n    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" \/>\n    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"
+        \/>\n    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"
+        \/>\n    <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION"
+        \/>\n    <uses-permission android:name="android.permission.SET_WALLPAPER" \/>/''
+        "$MANIFEST"
+  
+        grep -q ''xmlns:tools'' "$MANIFEST" || sed -i ''s|<manifest |<manifest xmlns:tools="http://schemas.android.com/tools"
+        |'' "$MANIFEST"
+  
+        sed -i ''s|[$]{applicationName}|.PhotoApplication|g'' "$MANIFEST"
+  
+        grep -q ''WorkManagerInitializer'' "$MANIFEST" || perl -0pi -e ''s/(<\/application>)/        <provider
+        android:name="androidx.startup.InitializationProvider" android:authorities="\${applicationId}.androidx-startup"
+        android:exported="false" tools:node="merge">\n            <meta-data android:name="androidx.work.WorkManagerInitializer"
+        tools:node="remove" \/>\n        <\/provider>\n    $1/'' "$MANIFEST"
+  
+        grep -q ''PlaylistWallpaperService'' "$MANIFEST" || perl -0pi -e ''s/(<\/application>)/        <service
+        android:name=".PlaylistWallpaperService" android:exported="true" android:label="\@string\/playlist_wallpaper_label"
+        android:permission="android.permission.BIND_WALLPAPER">\n            <intent-filter>\n                <action
+        android:name="android.service.wallpaper.WallpaperService" \/>\n            <\/intent-filter>\n            <meta-data
+        android:name="android.service.wallpaper" android:resource="\@xml\/playlist_wallpaper"
+        \/>\n        <\/service>\n    $1/'' "$MANIFEST"
+  
+        '
+    - name: Inject native Kotlin code
+      run: "GEN=$(find android/app/src/main -name MainActivity.kt | head -1)\nPKG=$(grep\
+        \ -m1 '^package ' \"$GEN\" | sed 's/^package //; s/[[:space:]]*$//')\nPKGDIR=$(dirname\
+        \ \"$GEN\")\nfor kt in flutter_src/native/*.kt; do\n  name=$(basename \"$kt\"\
+        )\n  sed \"s/__PACKAGE__/$PKG/\" \"$kt\" > \"$PKGDIR/$name\"\ndone\nif [ -d\
+        \ flutter_src/native/res ]; then\n  mkdir -p android/app/src/main/res/xml android/app/src/main/res/values\n\
+        \  cp flutter_src/native/res/xml/*.xml android/app/src/main/res/xml/ 2>/dev/null\
+        \ || true\n  cp flutter_src/native/res/values/*.xml android/app/src/main/res/values/\
+        \ 2>/dev/null || true\nfi\n"
+    - name: Inject WorkManager dependency
+      run: "APP_GRADLE=$(ls android/app/build.gradle.kts android/app/build.gradle 2>/dev/null\
+        \ | head -1)\ncp flutter_src/native/proguard-rules.pro android/app/proguard-rules.pro\n\
+        if grep -q 'work-runtime' \"$APP_GRADLE\"; then\n  echo \"work dep already present\"\
+        \nelif [[ \"$APP_GRADLE\" == *.kts ]]; then\n  printf '\\ndependencies {\\n\
+        \    implementation(\"androidx.work:work-runtime-ktx:2.9.1\")\\n}\\n' >> \"\
+        $APP_GRADLE\"\nelse\n  printf '\\ndependencies {\\n    implementation \"androidx.work:work-runtime-ktx:2.9.1\"\
+        \\n}\\n' >> \"$APP_GRADLE\"\nfi\n"
+    - name: Compile app without release credentials
+      run: 'flutter pub get
+  
+        flutter build apk --debug'

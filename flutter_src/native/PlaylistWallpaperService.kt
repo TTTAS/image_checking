@@ -1,13 +1,15 @@
 package __PACKAGE__
 
+import android.app.WallpaperManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.ImageDecoder
 import android.graphics.Movie
 import android.graphics.drawable.AnimatedImageDrawable
 import android.graphics.drawable.Drawable
-import android.graphics.ImageDecoder
+import android.media.MediaPlayer
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -15,12 +17,15 @@ import android.os.SystemClock
 import android.service.wallpaper.WallpaperService
 import android.util.Log
 import android.view.SurfaceHolder
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
-/// Live wallpaper: plays the HOME playlist (GIF / animated WebP / stills).
-/// Visible-only 16ms draw loop. GIFs use Movie.setTime; WebP uses ImageDecoder
-/// SOFTWARE bitmaps. Returning to home restarts the current item from frame 0.
+/// Live wallpaper playlist for still images, animated images, and videos.
+///
+/// Android 14+ exposes which screen owns each Engine, so HOME and LOCK can use
+/// separate lists. Earlier Android versions do not expose that distinction to a
+/// wallpaper service; they use HOME (or LOCK when HOME is empty).
 class PlaylistWallpaperService : WallpaperService() {
     private data class Item(
         val path: String,
@@ -28,6 +33,8 @@ class PlaylistWallpaperService : WallpaperService() {
         val fx: Float,
         val fy: Float,
         val animated: Boolean,
+        val video: Boolean,
+        val fallbackPath: String,
     )
 
     override fun onCreateEngine(): Engine = PlaylistEngine()
@@ -36,10 +43,13 @@ class PlaylistWallpaperService : WallpaperService() {
         private val handler = Handler(Looper.getMainLooper())
         private val tag = "PlaylistWP"
 
-        private val items = mutableListOf<Item>()
+        private val homeItems = mutableListOf<Item>()
+        private val lockItems = mutableListOf<Item>()
+        private var items: List<Item> = emptyList()
         private var order = mutableListOf<Int>()
         private var seconds = 30
         private var loops = 1
+        private var shuffle = false
         private var pos = 0
 
         private var visible = false
@@ -49,6 +59,20 @@ class PlaylistWallpaperService : WallpaperService() {
         private var drawable: Drawable? = null
         private var movie: Movie? = null
         private var still: Bitmap? = null
+        private var player: MediaPlayer? = null
+        private var renderer: WallpaperRenderer? = null
+        private var frameBitmap: Bitmap? = null
+        private var playbackGeneration = 0
+        private var firstVideoFrame = false
+        private val nextItem = Runnable { advance() }
+        private val videoTimeout = Runnable {
+            if (!firstVideoFrame && player != null) {
+                reportError("影片未能在 15 秒內輸出畫面")
+                releasePlayer()
+                drawFrame()
+                handler.postDelayed(nextItem, seconds * 1000L)
+            }
+        }
         private var movieStart = 0L
 
         private var drawScale = 1f
@@ -59,26 +83,54 @@ class PlaylistWallpaperService : WallpaperService() {
 
         private val tick = object : Runnable {
             override fun run() {
-                if (!visible) return
+                if (!visible || player != null) return
                 drawFrame()
-                handler.postDelayed(this, 16L)
+                if (movie != null || drawable != null) handler.postDelayed(this, 33L)
             }
         }
 
         override fun onCreate(surfaceHolder: SurfaceHolder) {
             super.onCreate(surfaceHolder)
+            recordStatus("Engine 建立；系統預覽=$isPreview")
             loadManifest()
         }
 
-        override fun onSurfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {
+        override fun onSurfaceCreated(holder: SurfaceHolder) {
+            super.onSurfaceCreated(holder)
+            recordStatus("Surface 建立；有效=${holder.surface.isValid}")
+        }
+
+        override fun onSurfaceChanged(
+            holder: SurfaceHolder,
+            format: Int,
+            width: Int,
+            height: Int,
+        ) {
+            stopAll()
             surfaceW = width
             surfaceH = height
+            recordStatus("Surface 尺寸 ${width}x${height}；可見=$visible")
+            if (renderer == null && holder.surface.isValid) {
+                try {
+                    renderer = WallpaperRenderer(holder.surface)
+                } catch (e: Exception) {
+                    reportError("桌布繪圖器初始化失敗", e)
+                    return
+                }
+            }
+            // The service can outlive the app. Always reload because applying a
+            // new playlist replaces the private media files and manifest.
+            loadManifest()
             if (visible) playCurrent(0)
         }
 
         override fun onVisibilityChanged(v: Boolean) {
             visible = v
+            recordStatus("可見狀態=$v")
             if (v) {
+                // A live wallpaper Engine is commonly reused across multiple
+                // apply operations; its old file paths may no longer exist.
+                loadManifest()
                 playCurrent(0)
             } else {
                 stopAll()
@@ -87,60 +139,144 @@ class PlaylistWallpaperService : WallpaperService() {
 
         override fun onSurfaceDestroyed(holder: SurfaceHolder) {
             stopAll()
+            renderer?.release()
+            renderer = null
+            surfaceW = 0
+            surfaceH = 0
             super.onSurfaceDestroyed(holder)
         }
 
         override fun onDestroy() {
             stopAll()
+            renderer?.release()
+            renderer = null
             super.onDestroy()
         }
 
+        private fun parseItems(arr: JSONArray?, out: MutableList<Item>) {
+            out.clear()
+            if (arr == null) return
+            for (i in 0 until arr.length()) {
+                val o = arr.optJSONObject(i) ?: continue
+                val path = o.optString("path", "")
+                if (path.isEmpty()) continue
+                out.add(
+                    Item(
+                        path = path,
+                        zoom = o.optDouble("zoom", 0.0).toFloat(),
+                        fx = o.optDouble("focusX", 0.5).toFloat(),
+                        fy = o.optDouble("focusY", 0.5).toFloat(),
+                        animated = o.optBoolean("animated", false),
+                        video = o.optBoolean("video", false),
+                        fallbackPath = o.optString("fallbackPath", ""),
+                    )
+                )
+            }
+        }
+
         private fun loadManifest() {
-            items.clear()
             try {
-                val f = File(filesDir, "wallpaper_live.json")
-                if (!f.exists()) {
+                val file = File(filesDir, "wallpaper_live.json")
+                if (!file.exists()) {
                     Log.w(tag, "no wallpaper_live.json")
                     return
                 }
-                val root = JSONObject(f.readText())
-                seconds = root.optInt("seconds", 30)
+                val root = JSONObject(file.readText())
+                seconds = root.optInt("seconds", 30).coerceAtLeast(1)
                 loops = root.optInt("loops", 1).coerceAtLeast(1)
-                val arr = root.optJSONArray("items") ?: return
-                for (i in 0 until arr.length()) {
-                    val o = arr.getJSONObject(i)
-                    items.add(
-                        Item(
-                            path = o.optString("path", ""),
-                            zoom = o.optDouble("zoom", 0.0).toFloat(),
-                            fx = o.optDouble("focusX", 0.5).toFloat(),
-                            fy = o.optDouble("focusY", 0.5).toFloat(),
-                            animated = o.optBoolean("animated", false),
-                        )
-                    )
-                }
-                order = (0 until items.size).toMutableList()
-                if (root.optBoolean("shuffle", false)) order.shuffle()
-                pos = 0
-                Log.i(tag, "loaded ${items.size} items seconds=$seconds")
+                shuffle = root.optBoolean("shuffle", false)
+                // Backward compatibility with manifests written by older builds.
+                parseItems(
+                    root.optJSONArray("homeItems") ?: root.optJSONArray("items"),
+                    homeItems,
+                )
+                parseItems(root.optJSONArray("lockItems"), lockItems)
+                selectTargetList()
+                recordStatus("載入清單：主畫面 ${homeItems.size}、鎖定 ${lockItems.size}、本引擎 ${items.size}")
+                Log.i(
+                    tag,
+                    "loaded home=${homeItems.size} lock=${lockItems.size} seconds=$seconds",
+                )
             } catch (e: Exception) {
                 Log.e(tag, "loadManifest", e)
-                items.clear()
+                homeItems.clear()
+                lockItems.clear()
+                items = emptyList()
+            }
+        }
+
+        private fun wallpaperFlagsCompat(): Int {
+            if (Build.VERSION.SDK_INT < 34) return WallpaperManager.FLAG_SYSTEM
+            return try {
+                val method = WallpaperService.Engine::class.java
+                    .getMethod("getWallpaperFlags")
+                (method.invoke(this) as? Int) ?: WallpaperManager.FLAG_SYSTEM
+            } catch (_: Exception) {
+                WallpaperManager.FLAG_SYSTEM
+            }
+        }
+
+        private fun selectTargetList() {
+            val flags = wallpaperFlagsCompat()
+            val lockOnly = flags and WallpaperManager.FLAG_LOCK != 0 &&
+                flags and WallpaperManager.FLAG_SYSTEM == 0
+            items = when {
+                lockOnly && lockItems.isNotEmpty() -> lockItems
+                homeItems.isNotEmpty() -> homeItems
+                else -> lockItems
+            }
+            order = (items.indices).toMutableList()
+            if (shuffle) order.shuffle()
+            if (pos !in order.indices) pos = 0
+        }
+
+        private fun recordStatus(message: String) {
+            try {
+                synchronized(PlaylistWallpaperService::class.java) {
+                    val file = File(filesDir, "wallpaper_live_status.txt")
+                    val previous = if (file.exists()) file.readLines().takeLast(39) else emptyList()
+                    file.writeText((previous + "${java.util.Date()} [${hashCode()}] $message")
+                        .joinToString("\n"))
+                }
+            } catch (_: Exception) { }
+        }
+
+        private fun reportError(message: String, error: Exception? = null) {
+            val detail = if (error == null) message else "$message：${error.message}"
+            Log.e(tag, detail, error)
+            recordStatus(detail)
+            try {
+                File(filesDir, "wallpaper_live_error.txt").writeText(
+                    "${java.util.Date()}\n$detail\n" + (error?.stackTraceToString() ?: ""))
+            } catch (_: Exception) { }
+        }
+
+        private fun releasePlayer() {
+            playbackGeneration++
+            val old = player
+            player = null
+            old?.setOnPreparedListener(null)
+            old?.setOnErrorListener(null)
+            old?.setOnVideoSizeChangedListener(null)
+            try { old?.release() } catch (_: Exception) { }
+            try { renderer?.releaseVideo() } catch (e: Exception) {
+                reportError("釋放影片輸出失敗", e)
             }
         }
 
         private fun stopAll() {
             handler.removeCallbacksAndMessages(null)
+            releasePlayer()
             (drawable as? AnimatedImageDrawable)?.let {
-                try {
-                    it.stop()
-                } catch (_: Exception) {
-                }
+                try { it.stop() } catch (_: Exception) { }
             }
             drawable?.callback = null
             drawable = null
             movie = null
+            still?.recycle()
             still = null
+            frameBitmap?.recycle()
+            frameBitmap = null
         }
 
         private fun advance() {
@@ -151,39 +287,49 @@ class PlaylistWallpaperService : WallpaperService() {
 
         private fun playCurrent(attempt: Int) {
             stopAll()
-            if (!visible || surfaceW <= 0 || surfaceH <= 0) return
+            if (!visible || surfaceW <= 0 || surfaceH <= 0 || renderer == null) return
             if (order.isEmpty() || attempt > order.size) {
+                reportError("沒有可播放的桌布項目，或所有檔案均讀取失敗")
                 clearBlack()
                 return
             }
             val item = items.getOrNull(order[pos]) ?: return
             val file = File(item.path)
             if (!file.exists()) {
-                Log.w(tag, "missing ${item.path}")
+                reportError("找不到桌布檔案：${item.path}")
                 pos = (pos + 1) % order.size
                 playCurrent(attempt + 1)
                 return
             }
             try {
-                val wantAnim = item.animated || looksAnimated(file)
-                if (wantAnim && tryPlayGifMovie(file, item)) {
-                    // ok
-                } else if (wantAnim && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
-                    tryPlayAnimatedDrawable(file, item)
-                ) {
-                    // ok
-                } else {
-                    playStatic(file, item)
+                when {
+                    item.video || looksVideo(file) -> playVideo(file, item)
+                    (item.animated || looksAnimated(file)) &&
+                        tryPlayGifMovie(file, item) -> Unit
+                    (item.animated || looksAnimated(file)) &&
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                        tryPlayAnimatedDrawable(file, item) -> Unit
+                    else -> playStatic(file, item)
                 }
             } catch (e: Exception) {
-                Log.e(tag, "playCurrent", e)
+                reportError("載入桌布失敗：${file.name}", e)
                 pos = (pos + 1) % order.size
                 playCurrent(attempt + 1)
                 return
             }
-            val delayMs = (if (seconds > 0) seconds else 8) * 1000L
-            handler.postDelayed({ advance() }, delayMs)
-            handler.post(tick)
+
+            // Video time starts after a decoded frame has actually been drawn.
+            if (player == null) {
+                handler.postDelayed(nextItem, seconds * 1000L)
+                handler.post(tick)
+            }
+        }
+
+        private fun looksVideo(file: File): Boolean {
+            val n = file.name.lowercase()
+            return n.endsWith(".mp4") || n.endsWith(".m4v") ||
+                n.endsWith(".mov") || n.endsWith(".webm") ||
+                n.endsWith(".3gp") || n.endsWith(".mkv")
         }
 
         private fun looksAnimated(file: File): Boolean {
@@ -191,117 +337,195 @@ class PlaylistWallpaperService : WallpaperService() {
             return n.endsWith(".gif") || n.endsWith(".webp")
         }
 
+        private fun playVideo(file: File, item: Item) {
+            val output = renderer ?: return
+            clearBlack()
+            val fallback = item.fallbackPath.takeIf { it.isNotEmpty() }?.let(::File)
+            if (fallback?.exists() == true) {
+                still = decodeScaled(fallback, maxOf(surfaceW, surfaceH))
+                still?.let {
+                    computeTransform(item, it.width, it.height)
+                    drawFrame()
+                }
+            }
+            firstVideoFrame = false
+            recordStatus("開始準備影片：${file.name}，${file.length()} bytes")
+            val generation = playbackGeneration
+            val mediaPlayer = MediaPlayer()
+            player = mediaPlayer
+            val decoderSurface = output.createVideoSurface(handler) {
+                if (visible && player === mediaPlayer && generation == playbackGeneration) {
+                    try {
+                        output.drawVideo(surfaceW, surfaceH, drawLeft, drawTop,
+                            imgW * drawScale, imgH * drawScale)
+                        if (!firstVideoFrame) {
+                            firstVideoFrame = true
+                            handler.removeCallbacks(videoTimeout)
+                            handler.postDelayed(nextItem, seconds * 1000L)
+                            recordStatus("已繪出影片第一幀：${file.name}")
+                        }
+                    } catch (e: Exception) {
+                        reportError("影片畫面輸出失敗：${file.name}", e)
+                        handler.removeCallbacks(videoTimeout)
+                        releasePlayer()
+                        drawFrame()
+                        handler.removeCallbacks(nextItem)
+                        handler.postDelayed(nextItem, seconds * 1000L)
+                    }
+                }
+            }
+            mediaPlayer.setDataSource(file.absolutePath)
+            // The decoder never receives the wallpaper Surface.
+            mediaPlayer.setSurface(decoderSurface)
+            mediaPlayer.setVolume(0f, 0f)
+            mediaPlayer.isLooping = true
+            mediaPlayer.setOnVideoSizeChangedListener { current, w, h ->
+                if (player === current && w > 0 && h > 0) computeTransform(item, w, h)
+            }
+            mediaPlayer.setOnPreparedListener { current ->
+                if (visible && player === current && generation == playbackGeneration) {
+                    try {
+                        computeTransform(item, current.videoWidth.coerceAtLeast(1),
+                            current.videoHeight.coerceAtLeast(1))
+                        recordStatus("影片已解碼：${current.videoWidth}x${current.videoHeight}，等待繪製")
+                        current.start()
+                    } catch (e: Exception) {
+                        reportError("啟動影片失敗：${file.name}", e)
+                        releasePlayer()
+                        drawFrame()
+                        handler.postDelayed(nextItem, seconds * 1000L)
+                    }
+                }
+            }
+            mediaPlayer.setOnErrorListener { failed, what, extra ->
+                if (player === failed) {
+                    reportError("影片播放失敗：${file.name}（播放器錯誤 $what/$extra）")
+                    handler.removeCallbacks(videoTimeout)
+                    releasePlayer()
+                    drawFrame()
+                    handler.removeCallbacks(nextItem)
+                    handler.postDelayed(nextItem, seconds * 1000L)
+                }
+                true
+            }
+            handler.postDelayed(videoTimeout, 15000L)
+            mediaPlayer.prepareAsync()
+        }
+
         @Suppress("DEPRECATION")
         private fun tryPlayGifMovie(file: File, item: Item): Boolean {
             if (!file.name.lowercase().endsWith(".gif")) return false
             val bytes = file.readBytes()
-            val m = Movie.decodeByteArray(bytes, 0, bytes.size) ?: return false
-            if (m.duration() <= 0 || m.width() <= 0) return false
-            movie = m
+            val decoded = Movie.decodeByteArray(bytes, 0, bytes.size) ?: return false
+            if (decoded.duration() <= 0 || decoded.width() <= 0) return false
+            movie = decoded
             movieStart = SystemClock.uptimeMillis()
-            computeTransform(item, m.width(), m.height())
-            Log.i(tag, "Movie gif ${file.name} ${m.width()}x${m.height()} dur=${m.duration()}")
+            computeTransform(item, decoded.width(), decoded.height())
             return true
         }
 
         private fun tryPlayAnimatedDrawable(file: File, item: Item): Boolean {
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return false
-            val src = ImageDecoder.createSource(file)
-            val d = ImageDecoder.decodeDrawable(src) { decoder, info, _ ->
+            val source = ImageDecoder.createSource(file)
+            val decoded = ImageDecoder.decodeDrawable(source) { decoder, info, _ ->
                 decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
-                val long = maxOf(info.size.width, info.size.height)
+                val longest = maxOf(info.size.width, info.size.height)
                 val target = maxOf(surfaceW, surfaceH).coerceAtLeast(1)
-                if (long > target * 2) {
-                    val scale = long.toFloat() / (target * 2)
+                if (longest > target * 2) {
+                    val scale = longest.toFloat() / (target * 2)
                     decoder.setTargetSize(
                         (info.size.width / scale).toInt().coerceAtLeast(1),
                         (info.size.height / scale).toInt().coerceAtLeast(1),
                     )
                 }
             }
-            if (d !is AnimatedImageDrawable) {
-                Log.i(tag, "decode not animated: ${d.javaClass.simpleName}")
-                return false
-            }
-            drawable = d
-            computeTransform(item, d.intrinsicWidth.coerceAtLeast(1), d.intrinsicHeight.coerceAtLeast(1))
-            d.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
-            d.start()
-            Log.i(tag, "AnimatedImageDrawable ${file.name} ${d.intrinsicWidth}x${d.intrinsicHeight}")
+            if (decoded !is AnimatedImageDrawable) return false
+            drawable = decoded
+            computeTransform(
+                item,
+                decoded.intrinsicWidth.coerceAtLeast(1),
+                decoded.intrinsicHeight.coerceAtLeast(1),
+            )
+            decoded.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
+            decoded.start()
             return true
         }
 
         private fun playStatic(file: File, item: Item) {
-            val bmp = decodeScaled(file, maxOf(surfaceW, surfaceH))
+            val bitmap = decodeScaled(file, maxOf(surfaceW, surfaceH))
                 ?: throw IllegalStateException("decode failed")
-            still = bmp
-            computeTransform(item, bmp.width, bmp.height)
-            Log.i(tag, "static ${file.name} ${bmp.width}x${bmp.height}")
+            still = bitmap
+            computeTransform(item, bitmap.width, bitmap.height)
         }
 
-        private fun computeTransform(item: Item, w: Int, h: Int) {
-            imgW = w
-            imgH = h
-            val contain = minOf(surfaceW.toFloat() / w, surfaceH.toFloat() / h)
-            val cover = maxOf(surfaceW.toFloat() / w, surfaceH.toFloat() / h)
-            // zoom <= 0: fit entire image centered (letterbox).
-            // zoom == 1: classic cover-center crop. >1 further zoom.
-            drawScale = if (item.zoom <= 0f) contain else cover * item.zoom.coerceAtLeast(0.1f)
-            drawLeft = surfaceW / 2f - drawScale * item.fx * w
-            drawTop = surfaceH / 2f - drawScale * item.fy * h
+        private fun computeTransform(item: Item, width: Int, height: Int) {
+            imgW = width
+            imgH = height
+            val contain = minOf(
+                surfaceW.toFloat() / width,
+                surfaceH.toFloat() / height,
+            )
+            val cover = maxOf(
+                surfaceW.toFloat() / width,
+                surfaceH.toFloat() / height,
+            )
+            // Default is contain/center: the whole item remains visible.
+            drawScale = if (item.zoom <= 0f) {
+                contain
+            } else {
+                cover * item.zoom.coerceAtLeast(0.1f)
+            }
+            drawLeft = surfaceW / 2f - drawScale * item.fx * width
+            drawTop = surfaceH / 2f - drawScale * item.fy * height
         }
 
         private fun drawFrame() {
-            val holder = surfaceHolder
-            var canvas: Canvas? = null
+            val output = renderer ?: return
+            if (surfaceW <= 0 || surfaceH <= 0) return
             try {
-                canvas = holder.lockCanvas() ?: return
+                // Software Canvas draws ONLY into a private Bitmap, never into
+                // the system Surface. EGL uploads that bitmap for presentation.
+                val ratio = minOf(1f, 1080f / maxOf(surfaceW, surfaceH))
+                val width = (surfaceW * ratio).toInt().coerceAtLeast(1)
+                val height = (surfaceH * ratio).toInt().coerceAtLeast(1)
+                var buffer = frameBitmap
+                if (buffer == null || buffer.width != width || buffer.height != height) {
+                    buffer?.recycle()
+                    buffer = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                    frameBitmap = buffer
+                }
+                val canvas = Canvas(buffer)
                 canvas.drawColor(Color.BLACK)
-                canvas.save()
+                canvas.scale(ratio, ratio)
                 canvas.translate(drawLeft, drawTop)
                 canvas.scale(drawScale, drawScale)
-                val m = movie
-                val d = drawable
-                val b = still
+                val currentMovie = movie
+                val currentDrawable = drawable
+                val bitmap = still
                 when {
-                    m != null -> {
-                        val dur = m.duration().coerceAtLeast(1)
-                        val t = ((SystemClock.uptimeMillis() - movieStart) % dur).toInt()
-                        m.setTime(t)
-                        m.draw(canvas, 0f, 0f)
+                    currentMovie != null -> {
+                        val duration = currentMovie.duration().coerceAtLeast(1)
+                        val time = ((SystemClock.uptimeMillis() - movieStart) % duration).toInt()
+                        currentMovie.setTime(time)
+                        currentMovie.draw(canvas, 0f, 0f)
                     }
-                    d != null -> {
-                        d.setBounds(0, 0, imgW, imgH)
-                        d.draw(canvas)
+                    currentDrawable != null -> {
+                        currentDrawable.setBounds(0, 0, imgW, imgH)
+                        currentDrawable.draw(canvas)
                     }
-                    b != null -> canvas.drawBitmap(b, 0f, 0f, null)
+                    bitmap != null -> canvas.drawBitmap(bitmap, 0f, 0f, null)
                 }
-                canvas.restore()
-            } catch (_: Exception) {
-            } finally {
-                if (canvas != null) {
-                    try {
-                        holder.unlockCanvasAndPost(canvas)
-                    } catch (_: Exception) {
-                    }
-                }
+                output.drawBitmap(buffer, surfaceW, surfaceH)
+            } catch (e: Exception) {
+                reportError("圖片畫面輸出失敗", e)
             }
         }
 
         private fun clearBlack() {
-            val holder = surfaceHolder
-            var canvas: Canvas? = null
             try {
-                canvas = holder.lockCanvas() ?: return
-                canvas.drawColor(Color.BLACK)
-            } catch (_: Exception) {
-            } finally {
-                if (canvas != null) {
-                    try {
-                        holder.unlockCanvasAndPost(canvas)
-                    } catch (_: Exception) {
-                    }
-                }
+                renderer?.clear(surfaceW, surfaceH)
+            } catch (e: Exception) {
+                reportError("桌布清除畫面失敗", e)
             }
         }
 
@@ -310,10 +534,11 @@ class PlaylistWallpaperService : WallpaperService() {
             BitmapFactory.decodeFile(file.absolutePath, bounds)
             if (bounds.outWidth <= 0) return null
             var sample = 1
-            val long = maxOf(bounds.outWidth, bounds.outHeight)
-            while (target > 0 && long / (sample * 2) >= target) sample *= 2
-            val opts = BitmapFactory.Options().apply { inSampleSize = sample }
-            return BitmapFactory.decodeFile(file.absolutePath, opts)
+            val longest = maxOf(bounds.outWidth, bounds.outHeight)
+            while (target > 0 && longest / (sample * 2) >= target) sample *= 2
+            val options = BitmapFactory.Options().apply { inSampleSize = sample }
+            return BitmapFactory.decodeFile(file.absolutePath, options)
         }
     }
 }
+

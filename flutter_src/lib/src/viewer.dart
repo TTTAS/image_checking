@@ -175,16 +175,19 @@ class _ViewerPageState extends State<ViewerPage> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
-          if (_current.type != AssetType.video)
-            PopupMenuButton<String>(
+          PopupMenuButton<String>(
               icon: const Icon(Icons.wallpaper),
               tooltip: '桌布',
               onSelected: (v) {
                 switch (v) {
                   case 'single':
-                    Navigator.of(context).push(MaterialPageRoute<void>(
-                      builder: (_) => WallpaperCropPage(asset: _current),
-                    ));
+                    if (_current.type == AssetType.video) {
+                      _addToPlaylist([WallpaperTarget.home]);
+                    } else {
+                      Navigator.of(context).push(MaterialPageRoute<void>(
+                        builder: (_) => WallpaperCropPage(asset: _current),
+                      ));
+                    }
                     break;
                   case 'home':
                     _addToPlaylist([WallpaperTarget.home]);
@@ -259,12 +262,19 @@ class _ViewerPageState extends State<ViewerPage> {
                   label: '最愛',
                   onTap: () => AppCollections.toggleFavorite(id),
                 ),
-                if (_current.type != AssetType.video)
-                  _action(
-                    icon: Icons.tune,
-                    label: '編輯',
-                    onTap: () => PhotoActions.openEditor(context, _current),
-                  ),
+                _action(
+                  icon: Icons.tune,
+                  label: '編輯',
+                  onTap: () {
+                    if (_current.type == AssetType.video) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('影片編輯目前不支援')),
+                      );
+                    } else {
+                      PhotoActions.openEditor(context, _current);
+                    }
+                  },
+                ),
                 _action(
                   icon: Icons.share_outlined,
                   label: '分享',
