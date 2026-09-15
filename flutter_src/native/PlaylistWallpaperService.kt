@@ -285,11 +285,28 @@ class PlaylistWallpaperService : WallpaperService() {
             mediaPlayer.setVolume(0f, 0f)
             mediaPlayer.isLooping = true
             mediaPlayer.setOnPreparedListener {
-                it.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT)
+                try {
+                    File(filesDir, "wallpaper_live_error.txt").delete()
+                } catch (_: Exception) {
+                }
+                it.setVideoScalingMode(
+                    if (item.zoom > 0f) {
+                        MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
+                    } else {
+                        MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT
+                    }
+                )
                 if (visible && player === it) it.start()
             }
             mediaPlayer.setOnErrorListener { failed, what, extra ->
-                Log.e(tag, "video error what=$what extra=$extra file=${file.name}")
+                val message =
+                    "影片播放失敗：${file.name}（播放器錯誤 $what/$extra）。" +
+                        "請確認影片為 H.264/AAC MP4。"
+                Log.e(tag, message)
+                try {
+                    File(filesDir, "wallpaper_live_error.txt").writeText(message)
+                } catch (_: Exception) {
+                }
                 try {
                     failed.release()
                 } catch (_: Exception) {
