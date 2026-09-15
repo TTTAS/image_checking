@@ -16,7 +16,6 @@ import android.os.Looper
 import android.os.SystemClock
 import android.service.wallpaper.WallpaperService
 import android.util.Log
-import android.view.Surface
 import android.view.SurfaceHolder
 import org.json.JSONArray
 import org.json.JSONObject
@@ -271,7 +270,7 @@ class PlaylistWallpaperService : WallpaperService() {
             val mediaPlayer = MediaPlayer()
             player = mediaPlayer
             mediaPlayer.setDataSource(file.absolutePath)
-            mediaPlayer.setSurface(Surface(surfaceHolder.surface))
+            mediaPlayer.setSurface(surfaceHolder.surface)
             mediaPlayer.setVolume(0f, 0f)
             mediaPlayer.isLooping = true
             mediaPlayer.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT)
