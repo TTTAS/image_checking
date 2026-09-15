@@ -175,16 +175,19 @@ class _ViewerPageState extends State<ViewerPage> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
-          if (_current.type != AssetType.video)
-            PopupMenuButton<String>(
+          PopupMenuButton<String>(
               icon: const Icon(Icons.wallpaper),
               tooltip: '桌布',
               onSelected: (v) {
                 switch (v) {
                   case 'single':
-                    Navigator.of(context).push(MaterialPageRoute<void>(
-                      builder: (_) => WallpaperCropPage(asset: _current),
-                    ));
+                    if (_current.type == AssetType.video) {
+                      _addToPlaylist([WallpaperTarget.home]);
+                    } else {
+                      Navigator.of(context).push(MaterialPageRoute<void>(
+                        builder: (_) => WallpaperCropPage(asset: _current),
+                      ));
+                    }
                     break;
                   case 'home':
                     _addToPlaylist([WallpaperTarget.home]);
