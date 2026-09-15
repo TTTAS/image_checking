@@ -60,6 +60,19 @@ class PlaylistWallpaperService : WallpaperService() {
         private var movie: Movie? = null
         private var still: Bitmap? = null
         private var player: MediaPlayer? = null
+        private var renderer: WallpaperRenderer? = null
+        private var frameBitmap: Bitmap? = null
+        private var playbackGeneration = 0
+        private var firstVideoFrame = false
+        private val nextItem = Runnable { advance() }
+        private val videoTimeout = Runnable {
+            if (!firstVideoFrame && player != null) {
+                reportError("影片未能在 15 秒內輸出畫面")
+                releasePlayer()
+                drawFrame()
+                handler.postDelayed(nextItem, seconds * 1000L)
+            }
+        }
         private var movieStart = 0L
 
         private var drawScale = 1f
@@ -72,7 +85,7 @@ class PlaylistWallpaperService : WallpaperService() {
             override fun run() {
                 if (!visible || player != null) return
                 drawFrame()
-                handler.postDelayed(this, 16L)
+                if (movie != null || drawable != null) handler.postDelayed(this, 33L)
             }
         }
 
@@ -87,8 +100,17 @@ class PlaylistWallpaperService : WallpaperService() {
             width: Int,
             height: Int,
         ) {
+            stopAll()
             surfaceW = width
             surfaceH = height
+            if (renderer == null && holder.surface.isValid) {
+                try {
+                    renderer = WallpaperRenderer(holder.surface)
+                } catch (e: Exception) {
+                    reportError("桌布繪圖器初始化失敗", e)
+                    return
+                }
+            }
             // The service can outlive the app. Always reload because applying a
             // new playlist replaces the private media files and manifest.
             loadManifest()
@@ -109,11 +131,17 @@ class PlaylistWallpaperService : WallpaperService() {
 
         override fun onSurfaceDestroyed(holder: SurfaceHolder) {
             stopAll()
+            renderer?.release()
+            renderer = null
+            surfaceW = 0
+            surfaceH = 0
             super.onSurfaceDestroyed(holder)
         }
 
         override fun onDestroy() {
             stopAll()
+            renderer?.release()
+            renderer = null
             super.onDestroy()
         }
 
@@ -193,27 +221,41 @@ class PlaylistWallpaperService : WallpaperService() {
             if (pos !in order.indices) pos = 0
         }
 
+        private fun reportError(message: String, error: Exception? = null) {
+            val detail = if (error == null) message else "$message：${error.message}"
+            Log.e(tag, detail, error)
+            try {
+                File(filesDir, "wallpaper_live_error.txt").writeText(
+                    "${java.util.Date()}\n$detail\n" + (error?.stackTraceToString() ?: ""))
+            } catch (_: Exception) { }
+        }
+
+        private fun releasePlayer() {
+            playbackGeneration++
+            val old = player
+            player = null
+            old?.setOnPreparedListener(null)
+            old?.setOnErrorListener(null)
+            old?.setOnVideoSizeChangedListener(null)
+            try { old?.release() } catch (_: Exception) { }
+            try { renderer?.releaseVideo() } catch (e: Exception) {
+                reportError("釋放影片輸出失敗", e)
+            }
+        }
+
         private fun stopAll() {
             handler.removeCallbacksAndMessages(null)
-            try {
-                player?.stop()
-            } catch (_: Exception) {
-            }
-            try {
-                player?.release()
-            } catch (_: Exception) {
-            }
-            player = null
+            releasePlayer()
             (drawable as? AnimatedImageDrawable)?.let {
-                try {
-                    it.stop()
-                } catch (_: Exception) {
-                }
+                try { it.stop() } catch (_: Exception) { }
             }
             drawable?.callback = null
             drawable = null
             movie = null
+            still?.recycle()
             still = null
+            frameBitmap?.recycle()
+            frameBitmap = null
         }
 
         private fun advance() {
@@ -224,15 +266,16 @@ class PlaylistWallpaperService : WallpaperService() {
 
         private fun playCurrent(attempt: Int) {
             stopAll()
-            if (!visible || surfaceW <= 0 || surfaceH <= 0) return
+            if (!visible || surfaceW <= 0 || surfaceH <= 0 || renderer == null) return
             if (order.isEmpty() || attempt > order.size) {
+                reportError("沒有可播放的桌布項目，或所有檔案均讀取失敗")
                 clearBlack()
                 return
             }
             val item = items.getOrNull(order[pos]) ?: return
             val file = File(item.path)
             if (!file.exists()) {
-                Log.w(tag, "missing ${item.path}")
+                reportError("找不到桌布檔案：${item.path}")
                 pos = (pos + 1) % order.size
                 playCurrent(attempt + 1)
                 return
@@ -248,15 +291,17 @@ class PlaylistWallpaperService : WallpaperService() {
                     else -> playStatic(file, item)
                 }
             } catch (e: Exception) {
-                Log.e(tag, "playCurrent", e)
+                reportError("載入桌布失敗：${file.name}", e)
                 pos = (pos + 1) % order.size
                 playCurrent(attempt + 1)
                 return
             }
 
-            val delayMs = seconds * 1000L
-            handler.postDelayed({ advance() }, delayMs)
-            if (player == null) handler.post(tick)
+            // Video time starts after a decoded frame has actually been drawn.
+            if (player == null) {
+                handler.postDelayed(nextItem, seconds * 1000L)
+                handler.post(tick)
+            }
         }
 
         private fun looksVideo(file: File): Boolean {
@@ -272,6 +317,8 @@ class PlaylistWallpaperService : WallpaperService() {
         }
 
         private fun playVideo(file: File, item: Item) {
+            val output = renderer ?: return
+            clearBlack()
             val fallback = item.fallbackPath.takeIf { it.isNotEmpty() }?.let(::File)
             if (fallback?.exists() == true) {
                 still = decodeScaled(fallback, maxOf(surfaceW, surfaceH))
@@ -279,49 +326,67 @@ class PlaylistWallpaperService : WallpaperService() {
                     computeTransform(item, it.width, it.height)
                     drawFrame()
                 }
-            } else {
-                clearBlack()
             }
+            firstVideoFrame = false
+            val generation = playbackGeneration
             val mediaPlayer = MediaPlayer()
             player = mediaPlayer
+            val decoderSurface = output.createVideoSurface(handler) {
+                if (visible && player === mediaPlayer && generation == playbackGeneration) {
+                    try {
+                        output.drawVideo(surfaceW, surfaceH, drawLeft, drawTop,
+                            imgW * drawScale, imgH * drawScale)
+                        if (!firstVideoFrame) {
+                            firstVideoFrame = true
+                            handler.removeCallbacks(videoTimeout)
+                            handler.postDelayed(nextItem, seconds * 1000L)
+                            Log.i(tag, "first video frame rendered: ${file.name}")
+                        }
+                    } catch (e: Exception) {
+                        reportError("影片畫面輸出失敗：${file.name}", e)
+                        handler.removeCallbacks(videoTimeout)
+                        releasePlayer()
+                        drawFrame()
+                        handler.removeCallbacks(nextItem)
+                        handler.postDelayed(nextItem, seconds * 1000L)
+                    }
+                }
+            }
             mediaPlayer.setDataSource(file.absolutePath)
-            mediaPlayer.setDisplay(surfaceHolder)
+            // The decoder never receives the wallpaper Surface.
+            mediaPlayer.setSurface(decoderSurface)
             mediaPlayer.setVolume(0f, 0f)
             mediaPlayer.isLooping = true
-            mediaPlayer.setOnPreparedListener {
-                try {
-                    File(filesDir, "wallpaper_live_error.txt").delete()
-                } catch (_: Exception) {
-                }
-                it.setVideoScalingMode(
-                    if (item.zoom > 0f) {
-                        MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT_WITH_CROPPING
-                    } else {
-                        MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT
+            mediaPlayer.setOnVideoSizeChangedListener { current, w, h ->
+                if (player === current && w > 0 && h > 0) computeTransform(item, w, h)
+            }
+            mediaPlayer.setOnPreparedListener { current ->
+                if (visible && player === current && generation == playbackGeneration) {
+                    try {
+                        computeTransform(item, current.videoWidth.coerceAtLeast(1),
+                            current.videoHeight.coerceAtLeast(1))
+                        current.start()
+                    } catch (e: Exception) {
+                        reportError("啟動影片失敗：${file.name}", e)
+                        releasePlayer()
+                        drawFrame()
+                        handler.postDelayed(nextItem, seconds * 1000L)
                     }
-                )
-                if (visible && player === it) it.start()
+                }
             }
             mediaPlayer.setOnErrorListener { failed, what, extra ->
-                val message =
-                    "影片播放失敗：${file.name}（播放器錯誤 $what/$extra）。" +
-                        "請確認影片為 H.264/AAC MP4。"
-                Log.e(tag, message)
-                try {
-                    File(filesDir, "wallpaper_live_error.txt").writeText(message)
-                } catch (_: Exception) {
+                if (player === failed) {
+                    reportError("影片播放失敗：${file.name}（播放器錯誤 $what/$extra）")
+                    handler.removeCallbacks(videoTimeout)
+                    releasePlayer()
+                    drawFrame()
+                    handler.removeCallbacks(nextItem)
+                    handler.postDelayed(nextItem, seconds * 1000L)
                 }
-                try {
-                    failed.release()
-                } catch (_: Exception) {
-                }
-                if (player === failed) player = null
-                // Keep the extracted preview frame visible until this item's
-                // normal interval elapses instead of leaving a black screen.
                 true
             }
+            handler.postDelayed(videoTimeout, 15000L)
             mediaPlayer.prepareAsync()
-            Log.i(tag, "video ${file.name}")
         }
 
         @Suppress("DEPRECATION")
@@ -392,12 +457,23 @@ class PlaylistWallpaperService : WallpaperService() {
         }
 
         private fun drawFrame() {
-            val holder = surfaceHolder
-            var canvas: Canvas? = null
+            val output = renderer ?: return
+            if (surfaceW <= 0 || surfaceH <= 0) return
             try {
-                canvas = holder.lockCanvas() ?: return
+                // Software Canvas draws ONLY into a private Bitmap, never into
+                // the system Surface. EGL uploads that bitmap for presentation.
+                val ratio = minOf(1f, 1080f / maxOf(surfaceW, surfaceH))
+                val width = (surfaceW * ratio).toInt().coerceAtLeast(1)
+                val height = (surfaceH * ratio).toInt().coerceAtLeast(1)
+                var buffer = frameBitmap
+                if (buffer == null || buffer.width != width || buffer.height != height) {
+                    buffer?.recycle()
+                    buffer = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                    frameBitmap = buffer
+                }
+                val canvas = Canvas(buffer)
                 canvas.drawColor(Color.BLACK)
-                canvas.save()
+                canvas.scale(ratio, ratio)
                 canvas.translate(drawLeft, drawTop)
                 canvas.scale(drawScale, drawScale)
                 val currentMovie = movie
@@ -406,9 +482,7 @@ class PlaylistWallpaperService : WallpaperService() {
                 when {
                     currentMovie != null -> {
                         val duration = currentMovie.duration().coerceAtLeast(1)
-                        val time = (
-                            (SystemClock.uptimeMillis() - movieStart) % duration
-                            ).toInt()
+                        val time = ((SystemClock.uptimeMillis() - movieStart) % duration).toInt()
                         currentMovie.setTime(time)
                         currentMovie.draw(canvas, 0f, 0f)
                     }
@@ -418,32 +492,17 @@ class PlaylistWallpaperService : WallpaperService() {
                     }
                     bitmap != null -> canvas.drawBitmap(bitmap, 0f, 0f, null)
                 }
-                canvas.restore()
-            } catch (_: Exception) {
-            } finally {
-                if (canvas != null) {
-                    try {
-                        holder.unlockCanvasAndPost(canvas)
-                    } catch (_: Exception) {
-                    }
-                }
+                output.drawBitmap(buffer, surfaceW, surfaceH)
+            } catch (e: Exception) {
+                reportError("圖片畫面輸出失敗", e)
             }
         }
 
         private fun clearBlack() {
-            val holder = surfaceHolder
-            var canvas: Canvas? = null
             try {
-                canvas = holder.lockCanvas() ?: return
-                canvas.drawColor(Color.BLACK)
-            } catch (_: Exception) {
-            } finally {
-                if (canvas != null) {
-                    try {
-                        holder.unlockCanvasAndPost(canvas)
-                    } catch (_: Exception) {
-                    }
-                }
+                renderer?.clear(surfaceW, surfaceH)
+            } catch (e: Exception) {
+                reportError("桌布清除畫面失敗", e)
             }
         }
 
@@ -459,3 +518,4 @@ class PlaylistWallpaperService : WallpaperService() {
         }
     }
 }
+

@@ -52,6 +52,35 @@ class _WallpaperPageState extends State<WallpaperPage>
     } catch (_) {}
   }
 
+  Future<void> _openDiagnostics() async {
+    String message;
+    try {
+      message = await NativeWallpaper.liveWallpaperError();
+      if (message.isEmpty) message = '尚未記錄播放錯誤。請套用輪播後再查看。';
+    } catch (e) {
+      message = '無法讀取播放診斷：$e';
+    }
+    if (!mounted) return;
+    final details = '版本 1.0.9+10\n$message';
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('播放診斷'),
+        content: SingleChildScrollView(child: SelectableText(details)),
+        actions: [
+          TextButton(
+            onPressed: () => Clipboard.setData(ClipboardData(text: details)),
+            child: const Text('複製'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('關閉'),
+          ),
+        ],
+      ),
+    );
+  }
+
   Future<void> _openCrop(WallpaperTarget target, WallpaperItem item) async {
     final navigator = Navigator.of(context);
     final messenger = ScaffoldMessenger.of(context);
@@ -309,9 +338,11 @@ class _WallpaperPageState extends State<WallpaperPage>
           PopupMenuButton<String>(
             onSelected: (v) {
               if (v == 'clear') _confirmClear();
+              if (v == 'diagnostics') _openDiagnostics();
             },
             itemBuilder: (context) => [
               PopupMenuItem(value: 'clear', child: Text('清空「${_tab.label}」清單')),
+              const PopupMenuItem(value: 'diagnostics', child: Text('播放診斷')),
             ],
           ),
         ],
@@ -652,3 +683,4 @@ class _SettingsSheetState extends State<_SettingsSheet> {
     );
   }
 }
+
