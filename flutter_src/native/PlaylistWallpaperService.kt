@@ -89,14 +89,18 @@ class PlaylistWallpaperService : WallpaperService() {
         ) {
             surfaceW = width
             surfaceH = height
-            selectTargetList()
+            // The service can outlive the app. Always reload because applying a
+            // new playlist replaces the private media files and manifest.
+            loadManifest()
             if (visible) playCurrent(0)
         }
 
         override fun onVisibilityChanged(v: Boolean) {
             visible = v
             if (v) {
-                selectTargetList()
+                // A live wallpaper Engine is commonly reused across multiple
+                // apply operations; its old file paths may no longer exist.
+                loadManifest()
                 playCurrent(0)
             } else {
                 stopAll()
