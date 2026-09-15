@@ -289,6 +289,24 @@ class WallpaperPlaylist {
     await _persist();
   }
 
+  static Future<void> setTransform(
+    WallpaperTarget t,
+    String id, {
+    required double zoom,
+    required double focusX,
+    required double focusY,
+  }) async {
+    final list = listFor(t);
+    final next = List<WallpaperItem>.from(list.value);
+    final i = next.indexWhere((e) => e.id == id);
+    if (i < 0) return;
+    next[i].cropZoom = zoom;
+    next[i].cropFocusX = focusX;
+    next[i].cropFocusY = focusY;
+    list.value = next;
+    await _persist();
+  }
+
   static Future<void> updateSettings(WallpaperSettings s) async {
     settings.value = s;
     await _persist();
