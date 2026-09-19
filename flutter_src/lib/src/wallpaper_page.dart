@@ -363,8 +363,8 @@ class _WallpaperPageState extends State<WallpaperPage>
           const Padding(
             padding: EdgeInsets.fromLTRB(12, 10, 12, 0),
             child: Text(
-              '圖片與影片可混合輪播。套用後會開系統「動態桌布」預覽，請按設定並選擇主畫面或主畫面與鎖定畫面。'
-              '圖片與影片預設完整置中顯示，不會裁掉內容。',
+              '圖片與影片可混合。套用後會開系統「動態桌布」預覽，請按設定並選擇主畫面或主畫面與鎖定畫面。'
+              '主畫面用左滑／右滑切換清單與各圖片的視窗，不會自動一張張換。',
               style: TextStyle(fontSize: 12),
               textAlign: TextAlign.center,
             ),
@@ -390,7 +390,6 @@ class _WallpaperPageState extends State<WallpaperPage>
           ),
           Expanded(child: _list(_tab)),
           const Divider(height: 1),
-          const _IntervalBar(),
           _ActionBar(onApply: _apply, onStop: _stop),
         ],
       ),
@@ -545,51 +544,6 @@ class _PlaylistTile extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _IntervalBar extends StatelessWidget {
-  const _IntervalBar();
-
-  static const _secs = [10, 15, 30, 60, 120];
-
-  static String _label(int sec) =>
-      sec < 60 ? '$sec 秒' : '${sec ~/ 60} 分鐘';
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<WallpaperSettings>(
-      valueListenable: WallpaperPlaylist.settings,
-      builder: (context, s, _) {
-        final current = s.liveSeconds <= 0 ? 30 : s.liveSeconds;
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '每個項目播多久換下一個（現在 ${_label(current)}；改完要再按套用）',
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                children: [
-                  for (final sec in _secs)
-                    ChoiceChip(
-                      label: Text(_label(sec)),
-                      selected: current == sec,
-                      onSelected: (_) => WallpaperPlaylist.updateSettings(
-                        s.copyWith(liveSeconds: sec),
-                      ),
-                    ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 }

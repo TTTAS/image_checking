@@ -394,9 +394,10 @@ class PlaylistWallpaperService : WallpaperService() {
                 return
             }
 
-            // Video time starts after a decoded frame has actually been drawn.
+            // A window sequence is navigated by horizontal swipe only, so we do
+            // NOT auto-advance on a timer. [tick] just keeps animated frames
+            // (GIF/WebP) redrawing; still images stay put until the user swipes.
             if (player == null) {
-                handler.postDelayed(nextItem, seconds * 1000L)
                 handler.post(tick)
             }
         }
@@ -437,7 +438,7 @@ class PlaylistWallpaperService : WallpaperService() {
                         if (!firstVideoFrame) {
                             firstVideoFrame = true
                             handler.removeCallbacks(videoTimeout)
-                            handler.postDelayed(nextItem, seconds * 1000L)
+                            // Swipe-only: the video loops in place; no auto-advance.
                             recordStatus("已繪出影片第一幀：${file.name}")
                         }
                     } catch (e: Exception) {
