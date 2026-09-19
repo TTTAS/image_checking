@@ -35,6 +35,10 @@ class PlaylistWallpaperService : WallpaperService() {
         val animated: Boolean,
         val video: Boolean,
         val fallbackPath: String,
+        // Index of the source playlist entry this window belongs to. Windows of
+        // the same source item share a group so shuffle keeps them together and
+        // in order.
+        val group: Int,
     )
 
     override fun onCreateEngine(): Engine = PlaylistEngine()
@@ -137,6 +141,33 @@ class PlaylistWallpaperService : WallpaperService() {
             }
         }
 
+        /// Home-screen horizontal swipe. The launcher reports how far the user
+        /// has scrolled between home pages as [xOffset] in 0..1; we map that
+        /// across the flattened window order so swiping right steps to the next
+        /// window (left steps back). A manual step resets the auto-advance
+        /// countdown so the picture doesn't jump again immediately.
+        ///
+        /// Launchers that lock wallpaper scrolling never call this (xOffset
+        /// stays constant); playback then relies on the timed advance instead.
+        override fun onOffsetsChanged(
+            xOffset: Float,
+            yOffset: Float,
+            xOffsetStep: Float,
+            yOffsetStep: Float,
+            xPixelOffset: Int,
+            yPixelOffset: Int,
+        ) {
+            val n = order.size
+            if (!visible || n <= 1) return
+            val clamped = if (xOffset.isNaN()) 0f else xOffset.coerceIn(0f, 1f)
+            val target = Math.round(clamped * (n - 1))
+            if (target != pos) {
+                pos = target
+                handler.removeCallbacks(nextItem)
+                playCurrent(0)
+            }
+        }
+
         override fun onSurfaceDestroyed(holder: SurfaceHolder) {
             stopAll()
             renderer?.release()
@@ -160,17 +191,45 @@ class PlaylistWallpaperService : WallpaperService() {
                 val o = arr.optJSONObject(i) ?: continue
                 val path = o.optString("path", "")
                 if (path.isEmpty()) continue
-                out.add(
-                    Item(
-                        path = path,
-                        zoom = o.optDouble("zoom", 0.0).toFloat(),
-                        fx = o.optDouble("focusX", 0.5).toFloat(),
-                        fy = o.optDouble("focusY", 0.5).toFloat(),
-                        animated = o.optBoolean("animated", false),
-                        video = o.optBoolean("video", false),
-                        fallbackPath = o.optString("fallbackPath", ""),
+                val animated = o.optBoolean("animated", false)
+                val video = o.optBoolean("video", false)
+                val fallbackPath = o.optString("fallbackPath", "")
+                // Expand the item's ordered crop windows into one Item each,
+                // sharing the same media file but framed differently. All belong
+                // to group [i] so they stay contiguous and in order after a
+                // shuffle. Fall back to the top-level transform (single window)
+                // for manifests written by older builds.
+                val windows = o.optJSONArray("windows")
+                if (windows != null && windows.length() > 0) {
+                    for (w in 0 until windows.length()) {
+                        val win = windows.optJSONObject(w) ?: continue
+                        out.add(
+                            Item(
+                                path = path,
+                                zoom = win.optDouble("zoom", 0.0).toFloat(),
+                                fx = win.optDouble("focusX", 0.5).toFloat(),
+                                fy = win.optDouble("focusY", 0.5).toFloat(),
+                                animated = animated,
+                                video = video,
+                                fallbackPath = fallbackPath,
+                                group = i,
+                            )
+                        )
+                    }
+                } else {
+                    out.add(
+                        Item(
+                            path = path,
+                            zoom = o.optDouble("zoom", 0.0).toFloat(),
+                            fx = o.optDouble("focusX", 0.5).toFloat(),
+                            fy = o.optDouble("focusY", 0.5).toFloat(),
+                            animated = animated,
+                            video = video,
+                            fallbackPath = fallbackPath,
+                            group = i,
+                        )
                     )
-                )
+                }
             }
         }
 
@@ -225,9 +284,26 @@ class PlaylistWallpaperService : WallpaperService() {
                 homeItems.isNotEmpty() -> homeItems
                 else -> lockItems
             }
-            order = (items.indices).toMutableList()
-            if (shuffle) order.shuffle()
+            order = buildOrder(items, shuffle)
             if (pos !in order.indices) pos = 0
+        }
+
+        /// Builds the playback order. Windows are grouped by their source item;
+        /// shuffle only reorders the groups, never the windows inside a group,
+        /// so a wide photo's left→right sequence always plays in order.
+        private fun buildOrder(source: List<Item>, shuffleGroups: Boolean):
+            MutableList<Int> {
+            val groups = LinkedHashMap<Int, MutableList<Int>>()
+            for (i in source.indices) {
+                groups.getOrPut(source[i].group) { mutableListOf() }.add(i)
+            }
+            val groupKeys = groups.keys.toMutableList()
+            if (shuffleGroups) groupKeys.shuffle()
+            val result = mutableListOf<Int>()
+            for (key in groupKeys) {
+                groups[key]?.let { result.addAll(it) }
+            }
+            return result
         }
 
         private fun recordStatus(message: String) {

@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:photo_manager/photo_manager.dart';
@@ -27,47 +26,103 @@ const Set<String> kWallpaperMimes = {
   'video/webm',
 };
 
+/// A single framing ("window") of an original image: how much to zoom and where
+/// to focus. [zoom] <= 0 means "fit the whole image, centered" (the default);
+/// a positive value is a cover-scale multiplier. [focusX]/[focusY] are the
+/// normalized point of the original (0..1) that maps to the screen center.
+///
+/// A wallpaper item owns an ordered list of these windows. The original image
+/// is never duplicated; each window is just a different view of it. On the
+/// home screen the live wallpaper walks through the windows in order (swipe or
+/// timed), so one wide photo can be shown left-part then right-part, etc.
+class CropWindow {
+  CropWindow({
+    this.zoom = 0.0,
+    this.focusX = 0.5,
+    this.focusY = 0.5,
+  });
+
+  double zoom;
+  double focusX;
+  double focusY;
+
+  /// Whether this window differs from the plain "fit whole image, centered".
+  bool get isDefault => zoom <= 0.0 && focusX == 0.5 && focusY == 0.5;
+
+  CropWindow copy() =>
+      CropWindow(zoom: zoom, focusX: focusX, focusY: focusY);
+
+  Map<String, dynamic> toJson() => {
+        'zoom': zoom,
+        'focusX': focusX,
+        'focusY': focusY,
+      };
+
+  static CropWindow fromJson(Map<String, dynamic> j) => CropWindow(
+        zoom: (j['zoom'] as num?)?.toDouble() ?? 0.0,
+        focusX: (j['focusX'] as num?)?.toDouble() ?? 0.5,
+        focusY: (j['focusY'] as num?)?.toDouble() ?? 0.5,
+      );
+}
+
 class WallpaperItem {
   WallpaperItem({
     required this.id,
     required this.mime,
     required this.animated,
-    this.filePath = '',
-    this.cropZoom = 0.0,
-    this.cropFocusX = 0.5,
-    this.cropFocusY = 0.5,
-  });
+    List<CropWindow>? windows,
+  }) : windows = (windows == null || windows.isEmpty)
+            ? <CropWindow>[CropWindow()]
+            : windows;
 
+  /// Id of the original photo/video (unique within a list).
   final String id;
-  String filePath;
   final String mime;
   bool animated;
-  double cropZoom;
-  double cropFocusX;
-  double cropFocusY;
 
-  bool get cropped => filePath.isNotEmpty;
+  /// Ordered framings of the original. Always at least one.
+  List<CropWindow> windows;
+
   bool get isVideo => mime.toLowerCase().startsWith('video/');
+
+  int get windowCount => windows.length;
+
+  /// True once the user has customised any framing (more than one window, or a
+  /// single non-default window).
+  bool get customized =>
+      windows.length > 1 || (windows.isNotEmpty && !windows.first.isDefault);
 
   Map<String, dynamic> toJson() => {
         'id': id,
-        'filePath': filePath,
         'mime': mime,
         'animated': animated,
-        'cropZoom': cropZoom,
-        'cropFocusX': cropFocusX,
-        'cropFocusY': cropFocusY,
+        'windows': windows.map((w) => w.toJson()).toList(),
       };
 
-  static WallpaperItem fromJson(Map<String, dynamic> j) => WallpaperItem(
-        id: j['id'] as String,
-        filePath: (j['filePath'] as String?) ?? '',
-        mime: (j['mime'] as String?) ?? '',
-        animated: (j['animated'] as bool?) ?? false,
-        cropZoom: (j['cropZoom'] as num?)?.toDouble() ?? 0.0,
-        cropFocusX: (j['cropFocusX'] as num?)?.toDouble() ?? 0.5,
-        cropFocusY: (j['cropFocusY'] as num?)?.toDouble() ?? 0.5,
-      );
+  static WallpaperItem fromJson(Map<String, dynamic> j) {
+    final raw = j['windows'];
+    List<CropWindow> windows;
+    if (raw is List && raw.isNotEmpty) {
+      windows = raw
+          .map((e) => CropWindow.fromJson(e as Map<String, dynamic>))
+          .toList();
+    } else {
+      // Migrate a legacy single-crop item (cropZoom/cropFocusX/cropFocusY).
+      windows = <CropWindow>[
+        CropWindow(
+          zoom: (j['cropZoom'] as num?)?.toDouble() ?? 0.0,
+          focusX: (j['cropFocusX'] as num?)?.toDouble() ?? 0.5,
+          focusY: (j['cropFocusY'] as num?)?.toDouble() ?? 0.5,
+        ),
+      ];
+    }
+    return WallpaperItem(
+      id: j['id'] as String,
+      mime: (j['mime'] as String?) ?? '',
+      animated: (j['animated'] as bool?) ?? false,
+      windows: windows,
+    );
+  }
 }
 
 class WallpaperSettings {
@@ -153,11 +208,8 @@ class WallpaperPlaylist {
     final rawLock = p.getString(_lockKey);
 
     if (rawHome == null && rawLock == null) {
-      final old = parse(p.getString(_oldItemsKey));
-      for (final it in old) {
-        it.filePath = '';
-      }
-      homeItems.value = old;
+      // Very old single-list layout: everything lived under one key.
+      homeItems.value = parse(p.getString(_oldItemsKey));
       lockItems.value = [];
     } else {
       homeItems.value = parse(rawHome);
@@ -196,6 +248,13 @@ class WallpaperPlaylist {
   static bool contains(WallpaperTarget t, String id) =>
       listFor(t).value.any((e) => e.id == id);
 
+  static WallpaperItem? itemFor(WallpaperTarget t, String id) {
+    for (final e in listFor(t).value) {
+      if (e.id == id) return e;
+    }
+    return null;
+  }
+
   static Future<bool> add(AssetEntity asset, WallpaperTarget t) async {
     if (!accepts(asset) || contains(t, asset.id)) return false;
     final mime = _mimeOf(asset);
@@ -217,7 +276,8 @@ class WallpaperPlaylist {
     for (final a in assets) {
       if (!accepts(a) || have.contains(a.id)) continue;
       final mime = _mimeOf(a);
-      next.add(WallpaperItem(id: a.id, mime: mime, animated: _looksAnimated(mime)));
+      next.add(
+          WallpaperItem(id: a.id, mime: mime, animated: _looksAnimated(mime)));
       have.add(a.id);
       added++;
     }
@@ -231,11 +291,9 @@ class WallpaperPlaylist {
   static Future<void> removeAt(WallpaperTarget t, int index) async {
     final list = listFor(t);
     if (index < 0 || index >= list.value.length) return;
-    final removed = list.value[index];
     final next = List<WallpaperItem>.from(list.value)..removeAt(index);
     list.value = next;
     await _persist();
-    await _deleteCrop(removed.filePath);
   }
 
   static Future<void> reorder(
@@ -253,42 +311,84 @@ class WallpaperPlaylist {
   static Future<void> clear(WallpaperTarget t) async {
     final list = listFor(t);
     if (list.value.isEmpty) return;
-    final gone = List<WallpaperItem>.from(list.value);
     list.value = [];
     await _persist();
-    for (final it in gone) {
-      await _deleteCrop(it.filePath);
-    }
   }
 
-  static Future<void> _deleteCrop(String path) async {
-    if (path.isEmpty) return;
-    try {
-      final f = File(path);
-      if (await f.exists()) await f.delete();
-    } catch (_) {}
-  }
+  // --- Window (crop) operations -------------------------------------------
 
-  static Future<void> setCropped(
-    WallpaperTarget t,
-    String id,
-    String path, {
-    double? zoom,
-    double? focusX,
-    double? focusY,
-  }) async {
+  /// Replaces the whole window list of [id] with a copy of [windows]
+  /// (at least one window is always kept).
+  static Future<void> setWindows(
+      WallpaperTarget t, String id, List<CropWindow> windows) async {
     final list = listFor(t);
     final next = List<WallpaperItem>.from(list.value);
     final i = next.indexWhere((e) => e.id == id);
     if (i < 0) return;
-    next[i].filePath = path;
-    if (zoom != null) next[i].cropZoom = zoom;
-    if (focusX != null) next[i].cropFocusX = focusX;
-    if (focusY != null) next[i].cropFocusY = focusY;
+    final copied = windows.map((w) => w.copy()).toList();
+    next[i].windows = copied.isEmpty ? <CropWindow>[CropWindow()] : copied;
     list.value = next;
     await _persist();
   }
 
+  /// Appends a new framing to [id] and returns its index.
+  static Future<int> addWindow(
+      WallpaperTarget t, String id, CropWindow window) async {
+    final list = listFor(t);
+    final next = List<WallpaperItem>.from(list.value);
+    final i = next.indexWhere((e) => e.id == id);
+    if (i < 0) return -1;
+    next[i].windows = [...next[i].windows, window.copy()];
+    list.value = next;
+    await _persist();
+    return next[i].windows.length - 1;
+  }
+
+  static Future<void> updateWindow(
+      WallpaperTarget t, String id, int index, CropWindow window) async {
+    final list = listFor(t);
+    final next = List<WallpaperItem>.from(list.value);
+    final i = next.indexWhere((e) => e.id == id);
+    if (i < 0 || index < 0 || index >= next[i].windows.length) return;
+    final ws = List<CropWindow>.from(next[i].windows);
+    ws[index] = window.copy();
+    next[i].windows = ws;
+    list.value = next;
+    await _persist();
+  }
+
+  /// Removes a framing. Keeps at least one window (a no-op on the last one).
+  static Future<void> removeWindow(
+      WallpaperTarget t, String id, int index) async {
+    final list = listFor(t);
+    final next = List<WallpaperItem>.from(list.value);
+    final i = next.indexWhere((e) => e.id == id);
+    if (i < 0 || next[i].windows.length <= 1) return;
+    if (index < 0 || index >= next[i].windows.length) return;
+    final ws = List<CropWindow>.from(next[i].windows)..removeAt(index);
+    next[i].windows = ws;
+    list.value = next;
+    await _persist();
+  }
+
+  static Future<void> reorderWindows(
+      WallpaperTarget t, String id, int oldIndex, int newIndex) async {
+    final list = listFor(t);
+    final next = List<WallpaperItem>.from(list.value);
+    final i = next.indexWhere((e) => e.id == id);
+    if (i < 0) return;
+    final ws = List<CropWindow>.from(next[i].windows);
+    if (oldIndex < 0 || oldIndex >= ws.length) return;
+    if (newIndex > oldIndex) newIndex -= 1;
+    final moved = ws.removeAt(oldIndex);
+    ws.insert(newIndex.clamp(0, ws.length), moved);
+    next[i].windows = ws;
+    list.value = next;
+    await _persist();
+  }
+
+  /// Sets a single framing for [id] (used by the video framing page, which has
+  /// exactly one window). Replaces any existing windows.
   static Future<void> setTransform(
     WallpaperTarget t,
     String id, {
@@ -296,15 +396,9 @@ class WallpaperPlaylist {
     required double focusX,
     required double focusY,
   }) async {
-    final list = listFor(t);
-    final next = List<WallpaperItem>.from(list.value);
-    final i = next.indexWhere((e) => e.id == id);
-    if (i < 0) return;
-    next[i].cropZoom = zoom;
-    next[i].cropFocusX = focusX;
-    next[i].cropFocusY = focusY;
-    list.value = next;
-    await _persist();
+    await setWindows(t, id, [
+      CropWindow(zoom: zoom, focusX: focusX, focusY: focusY),
+    ]);
   }
 
   static Future<void> updateSettings(WallpaperSettings s) async {

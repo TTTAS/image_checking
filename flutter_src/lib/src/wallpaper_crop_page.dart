@@ -15,8 +15,14 @@ import 'wallpaper_playlist.dart';
 /// The image is ALWAYS the original; the crop is stored as a normalized
 /// transform ([initialZoom]/[initialFocusX]/[initialFocusY]) so re-entering
 /// restores the same view and the user can still zoom out (below "cover") to
-/// recover parts that were previously cropped off. On confirm we capture the
-/// crop frame to a screen-sized bitmap (WYSIWYG).
+/// recover parts that were previously cropped off.
+///
+/// Two modes:
+///  * Default: a "set as wallpaper" screen that captures the crop frame to a
+///    screen-sized bitmap and writes it as the wallpaper (used from the viewer).
+///  * [pickWindow] = true: a framing picker used by the window-sequence editor.
+///    It does NOT touch the wallpaper; confirming pops a [CropWindow] describing
+///    the chosen zoom/focus.
 ///
 /// Default (zoom <= 0) = fit the entire image inside the screen, centered,
 /// with letterbox bars. Pinch-zoom in to fill / crop.
@@ -24,16 +30,18 @@ class WallpaperCropPage extends StatefulWidget {
   const WallpaperCropPage({
     super.key,
     required this.asset,
-    this.target,
+    this.pickWindow = false,
     this.initialZoom = 0.0,
     this.initialFocusX = 0.5,
     this.initialFocusY = 0.5,
   });
 
   final AssetEntity asset;
-  final WallpaperTarget? target;
 
-  /// Saved crop transform to restore (playlist mode).
+  /// When true, the page returns a [CropWindow] instead of setting a wallpaper.
+  final bool pickWindow;
+
+  /// Saved crop transform to restore.
   /// <= 0 means "fit entire image, centered" (the default).
   final double initialZoom;
   final double initialFocusX;
@@ -47,14 +55,12 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
   final GlobalKey _cropKey = GlobalKey();
   final TransformationController _transform = TransformationController();
 
-  bool _applied = false;
   bool _busy = false;
+  bool _applied = false;
 
   int _flags = kFlagSystem;
 
   double _bw = 0, _bh = 0, _cw = 0, _ch = 0;
-
-  bool get _isPlaylist => widget.target != null;
 
   bool get _animated {
     final m = (widget.asset.mimeType ?? '').toLowerCase();
@@ -110,50 +116,11 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
         .showSnackBar(SnackBar(content: Text('操作失敗：$m')));
   }
 
-  Future<void> _saveCropOnly() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    final t = widget.target!;
-    final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
-    try {
-      final (z, fx, fy) = _currentCrop();
-      final bytes = await _captureBytes();
-      final path = await NativeWallpaper.saveCrop(bytes, t.key, widget.asset.id);
-      await WallpaperPlaylist.setCropped(t, widget.asset.id, path,
-          zoom: z, focusX: fx, focusY: fy);
-      if (!mounted) return;
-      messenger.showSnackBar(
-          const SnackBar(content: Text('已儲存裁切（不會立刻換桌布，下次輪播會用它）')));
-      navigator.pop();
-    } catch (e) {
-      _fail(e);
-    }
-  }
-
-  Future<void> _setNowPlaylist() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    final t = widget.target!;
-    final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
-    try {
-      final (z, fx, fy) = _currentCrop();
-      final bytes = await _captureBytes();
-      final path = await NativeWallpaper.saveCrop(bytes, t.key, widget.asset.id);
-      await WallpaperPlaylist.setCropped(t, widget.asset.id, path,
-          zoom: z, focusX: fx, focusY: fy);
-      final honored = await NativeWallpaper.setWallpaperBytes(bytes, t.flag);
-      if (!mounted) return;
-      var msg = '已設為${t.label}的桌布，並存為裁切';
-      if (!honored && t.flag != kFlagSystem) {
-        msg += '（此裝置較舊，無法分開，已套用單一桌布）';
-      }
-      messenger.showSnackBar(SnackBar(content: Text(msg)));
-      navigator.pop();
-    } catch (e) {
-      _fail(e);
-    }
+  /// Window-picker mode: pop the chosen framing back to the sequence editor.
+  void _confirmPick() {
+    final (z, fx, fy) = _currentCrop();
+    Navigator.of(context)
+        .pop(CropWindow(zoom: z, focusX: fx, focusY: fy));
   }
 
   Future<void> _setSingle() async {
@@ -195,7 +162,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         title: Text(
-          _isPlaylist ? '裁切（${widget.target!.label}）' : '裁切桌布',
+          widget.pickWindow ? '選擇視窗範圍' : '裁切桌布',
           style: const TextStyle(fontSize: 16),
         ),
       ),
@@ -278,7 +245,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Text(
-              '預設把整張置中塞進畫面（多出來的邊留黑）。雘按放大可以切滿螢幕；框內就是桌布範圍。',
+              '預設把整張置中塞進畫面（多出來的邊留黑）。雙指放大可以切滿螢幕；框內就是這個視窗顯示的範圍。',
               style: TextStyle(color: Colors.white70, fontSize: 12),
               textAlign: TextAlign.center,
             ),
@@ -287,58 +254,38 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
             const Padding(
               padding: EdgeInsets.only(bottom: 4),
               child: Text(
-                '動態圖片只會擷取單一靜態畫面（會動要等 M3）。',
+                '動態圖片只會擷取單一靜態畫面。',
                 style: TextStyle(color: Colors.white54, fontSize: 11),
                 textAlign: TextAlign.center,
               ),
             ),
-          _isPlaylist ? _playlistBar() : _singleBar(),
+          widget.pickWindow ? _pickBar() : _singleBar(),
         ],
       ),
     );
   }
 
-  Widget _playlistBar() {
+  Widget _pickBar() {
     return Material(
       color: Colors.black,
       child: SafeArea(
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+          child: Row(
             children: [
-              const Text(
-                '「儲存裁切」只更新這張的裁切、不會立刻換桌布；「設為桌布」會存並立刻套用這一邊。',
-                style: TextStyle(color: Colors.white60, fontSize: 11),
-                textAlign: TextAlign.center,
+              Expanded(
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.check),
+                  label: const Text('使用這個視窗'),
+                  onPressed: _confirmPick,
+                ),
               ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _busy ? null : _saveCropOnly,
-                      style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white),
-                      child: const Text('儲存裁切'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: FilledButton.icon(
-                      icon: _busy
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.wallpaper),
-                      label: Text(_busy ? '處理中…' : '設為桌布'),
-                      onPressed: _busy ? null : _setNowPlaylist,
-                    ),
-                  ),
-                ],
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.white),
+                child: const Text('取消'),
               ),
             ],
           ),

@@ -44,6 +44,48 @@ object WallpaperStore {
         return saveJpeg(context, out, side, id)
     }
 
+    /// Renders the original framed by one crop window (zoom/focus) to a
+    /// screen-sized JPEG. [zoom] <= 0 means "fit whole image, centered".
+    /// Mirrors the live wallpaper's framing so static and live look the same.
+    fun renderCropSave(
+        context: Context,
+        srcPath: String,
+        side: String,
+        id: String,
+        zoom: Float,
+        focusX: Float,
+        focusY: Float,
+    ): String {
+        val (w, h) = screenSize(context)
+        val src = decodeScaled(srcPath, w, h) ?: throw IllegalStateException("無法解碼圖片")
+        val out = frameWindow(src, w, h, zoom, focusX, focusY)
+        return saveJpeg(context, out, side, id)
+    }
+
+    private fun frameWindow(
+        src: Bitmap,
+        w: Int,
+        h: Int,
+        zoom: Float,
+        fx: Float,
+        fy: Float,
+    ): Bitmap {
+        val contain = minOf(w.toFloat() / src.width, h.toFloat() / src.height)
+        val cover = maxOf(w.toFloat() / src.width, h.toFloat() / src.height)
+        val scale = if (zoom <= 0f) contain else cover * zoom.coerceAtLeast(0.1f)
+        val left = w / 2f - scale * fx * src.width
+        val top = h / 2f - scale * fy * src.height
+        val out = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        canvas.drawColor(Color.BLACK)
+        canvas.save()
+        canvas.translate(left, top)
+        canvas.scale(scale, scale)
+        canvas.drawBitmap(src, 0f, 0f, null)
+        canvas.restore()
+        return out
+    }
+
     private fun saveJpeg(context: Context, bmp: Bitmap, side: String, id: String): String {
         val f = File(cropDir(context, side), "${sanitize(id)}.jpg")
         f.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
@@ -112,12 +154,35 @@ object WallpaperStore {
                     } catch (_: Exception) {
                     }
                 }
+                // Ordered crop windows for this item. The live engine expands
+                // them into a swipeable/timed sub-sequence. Fall back to a
+                // single default window when none were supplied.
+                val windowsArr = JSONArray()
+                (item["windows"] as? List<*>)?.forEach { wobj ->
+                    val m = wobj as? Map<*, *> ?: return@forEach
+                    windowsArr.put(JSONObject().apply {
+                        put("zoom", (m["zoom"] as? Number)?.toDouble() ?: 0.0)
+                        put("focusX", (m["focusX"] as? Number)?.toDouble() ?: 0.5)
+                        put("focusY", (m["focusY"] as? Number)?.toDouble() ?: 0.5)
+                    })
+                }
+                if (windowsArr.length() == 0) {
+                    windowsArr.put(JSONObject().apply {
+                        put("zoom", 0.0)
+                        put("focusX", 0.5)
+                        put("focusY", 0.5)
+                    })
+                }
+                val firstWindow = windowsArr.optJSONObject(0)
                 arr.put(JSONObject().apply {
                     put("path", dst.absolutePath)
                     put("fallbackPath", fallbackPath)
-                    put("zoom", (item["zoom"] as? Number)?.toDouble() ?: 0.0)
-                    put("focusX", (item["focusX"] as? Number)?.toDouble() ?: 0.5)
-                    put("focusY", (item["focusY"] as? Number)?.toDouble() ?: 0.5)
+                    // Top-level transform kept for older engines that ignore
+                    // "windows"; it mirrors the first window.
+                    put("zoom", firstWindow?.optDouble("zoom", 0.0) ?: 0.0)
+                    put("focusX", firstWindow?.optDouble("focusX", 0.5) ?: 0.5)
+                    put("focusY", firstWindow?.optDouble("focusY", 0.5) ?: 0.5)
+                    put("windows", windowsArr)
                     put("animated", (item["animated"] as? Boolean) ?: false)
                     put("video", isVideo)
                 })

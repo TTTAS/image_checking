@@ -97,6 +97,23 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                     }
+                    "renderCropSave" -> {
+                        val src = call.argument<String>("srcPath")
+                        val side = call.argument<String>("side") ?: "home"
+                        val id = call.argument<String>("id")
+                        val zoom = (call.argument<Double>("zoom") ?: 0.0).toFloat()
+                        val focusX = (call.argument<Double>("focusX") ?: 0.5).toFloat()
+                        val focusY = (call.argument<Double>("focusY") ?: 0.5).toFloat()
+                        if (src == null || id == null) {
+                            result.error("ARGS", "srcPath / id required", null)
+                        } else {
+                            runOffThread(result) {
+                                WallpaperStore.renderCropSave(
+                                    applicationContext, src, side, id, zoom, focusX, focusY,
+                                )
+                            }
+                        }
+                    }
                     "applyRotation" -> {
                         val home = call.argument<List<String>>("home") ?: emptyList()
                         val lock = call.argument<List<String>>("lock") ?: emptyList()

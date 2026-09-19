@@ -3,8 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'native_wallpaper.dart';
-import 'wallpaper_crop_page.dart';
 import 'wallpaper_playlist.dart';
+import 'wallpaper_sequence_page.dart';
 import 'wallpaper_video_crop_page.dart';
 import 'widgets.dart';
 
@@ -89,43 +89,48 @@ class _WallpaperPageState extends State<WallpaperPage>
       messenger.showSnackBar(const SnackBar(content: Text('找不到原始圖片')));
       return;
     }
+    final initialZoom = item.windows.isNotEmpty ? item.windows.first.zoom : 0.0;
     if (asset.type == AssetType.video || item.isVideo) {
       navigator.push(MaterialPageRoute<void>(
         builder: (_) => WallpaperVideoCropPage(
           asset: asset,
           target: target,
-          initialZoom: item.cropZoom,
+          initialZoom: initialZoom,
         ),
       ));
       return;
     }
+    // Images open the window-sequence editor: one image can hold several
+    // ordered framings, all as a single playlist item.
     navigator.push(MaterialPageRoute<void>(
-      builder: (_) => WallpaperCropPage(
-        asset: asset,
-        target: target,
-        initialZoom: item.cropZoom,
-        initialFocusX: item.cropFocusX,
-        initialFocusY: item.cropFocusY,
-      ),
+      builder: (_) => WallpaperSequencePage(asset: asset, target: target),
     ));
   }
 
+  /// Static rotation renders one bitmap per window (in order) for each item, so
+  /// a multi-window item contributes several frames to the timed rotation.
   Future<List<String>> _resolvePaths(
       List<WallpaperItem> items, WallpaperTarget t) async {
     final paths = <String>[];
     for (final it in items) {
-      if (it.filePath.isNotEmpty) {
-        paths.add(it.filePath);
-        continue;
-      }
       try {
         final asset = await _asset(it.id);
         final file = await asset?.file;
         if (file == null) continue;
-        final path =
-            await NativeWallpaper.centerCropSave(file.path, t.key, it.id);
-        await WallpaperPlaylist.setCropped(t, it.id, path);
-        paths.add(path);
+        for (var w = 0; w < it.windows.length; w++) {
+          final win = it.windows[w];
+          try {
+            final path = await NativeWallpaper.renderCropSave(
+              file.path,
+              t.key,
+              '${it.id}_w$w',
+              zoom: win.zoom,
+              focusX: win.focusX,
+              focusY: win.focusY,
+            );
+            if (path.isNotEmpty) paths.add(path);
+          } catch (_) {}
+        }
       } catch (_) {}
     }
     return paths;
@@ -213,11 +218,17 @@ class _WallpaperPageState extends State<WallpaperPage>
             'srcPath': file.path,
             'id': it.id,
             'ext': _extFor(it.mime, file.path),
-            'zoom': it.cropZoom,
-            'focusX': it.cropFocusX,
-            'focusY': it.cropFocusY,
             'animated': _looksAnimated(it),
             'video': asset.type == AssetType.video || it.isVideo,
+            // Each item carries its ordered window framings; the native engine
+            // expands them into a swipeable/timed sub-sequence.
+            'windows': it.windows
+                .map((w) => {
+                      'zoom': w.zoom,
+                      'focusX': w.focusX,
+                      'focusY': w.focusY,
+                    })
+                .toList(),
           });
         } catch (_) {}
       }
@@ -498,12 +509,16 @@ class _PlaylistTile extends StatelessWidget {
       subtitle: Text(
         item.isVideo
             ? '影片（完整置中）'
-            : item.cropped
-                ? '已裁切'
-                : '完整置中（可點按裁切）',
+            : item.windowCount > 1
+                ? '${item.windowCount} 個視窗序列（可點按編輯）'
+                : item.customized
+                    ? '已裁切（可點按加視窗）'
+                    : '完整置中（可點按裁切／加視窗）',
         style: TextStyle(
           fontSize: 12,
-          color: item.cropped || item.isVideo ? Colors.green : null,
+          color: item.customized || item.windowCount > 1 || item.isVideo
+              ? Colors.green
+              : null,
         ),
       ),
       trailing: Row(
