@@ -10,11 +10,11 @@ import 'wallpaper_playlist.dart';
 /// still one entry in the playlist; on the home screen the live wallpaper steps
 /// through the windows by left/right swipe (it does NOT auto-advance windows).
 ///
-/// The top panel shows the whole image with every window's crop outline drawn
-/// on it (numbered, colour-matched to the list). You can **drag a window's box
-/// directly on that image** to fine-tune where it crops; releasing saves it.
-/// Below, windows can be added, auto-sliced, edited, reordered and deleted.
-/// At least one window is always kept.
+/// The top panel is a phone-screen-shaped viewport that shows the selected
+/// window exactly as the wallpaper would; dragging pans the image inside it
+/// (the picture slides under a fixed frame) and updates that window's crop.
+/// Below it a thin strip shows the whole image with every window's crop outline
+/// (tap to select which window the viewport edits), then the reorderable list.
 class WallpaperSequencePage extends StatelessWidget {
   const WallpaperSequencePage({
     super.key,
@@ -151,7 +151,7 @@ class WallpaperSequencePage extends StatelessWidget {
           final windows = item.windows;
           return Column(
             children: [
-              _Overview(
+              _PreviewPanel(
                 asset: asset,
                 windows: windows,
                 imgAspect: imgAspect,
@@ -160,11 +160,10 @@ class WallpaperSequencePage extends StatelessWidget {
                     target, asset.id, index, window),
               ),
               const Padding(
-                padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
+                padding: EdgeInsets.fromLTRB(16, 2, 16, 6),
                 child: Text(
-                  '每個「視窗」是這張圖的一塊顯示範圍，主畫面左滑／右滑依序切換（不會自動換）。'
-                  '在上圖用手指拖曳任一顏色框，即可微調該視窗裁切的位置（放開即存，拖曳時顯示對齊線）；'
-                  '點下方清單可放大編輯。寬圖想整張看完，按右上角「自動切片」。',
+                  '上方視窗＝主畫面實際看到的畫面，手指在裡面滑動就是移動這張圖。'
+                  '下方細條可點選要調哪個視窗；主畫面左滑／右滑依序切換視窗。',
                   style: TextStyle(fontSize: 12),
                 ),
               ),
@@ -203,8 +202,8 @@ class WallpaperSequencePage extends StatelessWidget {
   }
 }
 
-/// Visible half-extent (normalized 0..1) of a window in each axis, and the
-/// rectangle it shows. Mirrors the crop page's transform math.
+/// Visible half-extent (normalized 0..1) of a window in each axis. Mirrors the
+/// crop transform math (zoom is a cover-space multiplier; <=0 means fit).
 ({double halfW, double halfH}) _visibleHalf(
     CropWindow w, double imgAspect, double screenAspect) {
   const bw = 1.0;
@@ -233,8 +232,13 @@ Rect windowRect(CropWindow w, double imgAspect, double screenAspect) {
   );
 }
 
-class _Overview extends StatefulWidget {
-  const _Overview({
+double _clampFocus(double v, double half) {
+  if (half >= 0.5) return 0.5;
+  return v.clamp(half, 1 - half);
+}
+
+class _PreviewPanel extends StatefulWidget {
+  const _PreviewPanel({
     required this.asset,
     required this.windows,
     required this.imgAspect,
@@ -249,18 +253,187 @@ class _Overview extends StatefulWidget {
   final void Function(int index, CropWindow window) onWindowMoved;
 
   @override
-  State<_Overview> createState() => _OverviewState();
+  State<_PreviewPanel> createState() => _PreviewPanelState();
 }
 
-class _OverviewState extends State<_Overview> {
-  int _grabbed = -1;
+class _PreviewPanelState extends State<_PreviewPanel> {
+  int _selected = 0;
+  bool _dragging = false;
   double _liveX = 0.5;
   double _liveY = 0.5;
 
-  /// Constrain focus so the window stays fully on the image (no black edges).
-  double _clampFocus(double v, double half) {
-    if (half >= 0.5) return 0.5;
-    return v.clamp(half, 1 - half);
+  int get _sel => _selected.clamp(0, widget.windows.length - 1);
+
+  CropWindow get _selWindow => widget.windows[_sel];
+
+  double get _fx => _dragging ? _liveX : _selWindow.focusX;
+  double get _fy => _dragging ? _liveY : _selWindow.focusY;
+
+  /// Displayed image size inside a [vw]x[vh] viewport for the current window.
+  ({double w, double h}) _disp(double vw, double vh) {
+    final a = widget.imgAspect;
+    final cover = (vw / a > vh) ? vw / a : vh; // max(vw/a, vh)
+    final contain = (vw / a < vh) ? vw / a : vh; // min(vw/a, vh)
+    final zoom = _selWindow.zoom <= 0 ? 1.0 : _selWindow.zoom;
+    final s = _selWindow.zoom <= 0 ? contain : cover * zoom;
+    return (w: a * s, h: s);
+  }
+
+  void _panStart() {
+    setState(() {
+      _dragging = true;
+      _liveX = _selWindow.focusX;
+      _liveY = _selWindow.focusY;
+    });
+  }
+
+  void _panBy(Offset delta, double vw, double vh) {
+    final disp = _disp(vw, vh);
+    final halfX = (vw / 2) / disp.w;
+    final halfY = (vh / 2) / disp.h;
+    setState(() {
+      // Dragging the picture right reveals its left side → focus moves left.
+      _liveX = _clampFocus(_liveX - delta.dx / disp.w, halfX);
+      _liveY = _clampFocus(_liveY - delta.dy / disp.h, halfY);
+    });
+  }
+
+  void _panEnd() {
+    if (widget.windows.isNotEmpty) {
+      widget.onWindowMoved(
+        _sel,
+        CropWindow(zoom: _selWindow.zoom, focusX: _liveX, focusY: _liveY),
+      );
+    }
+    setState(() => _dragging = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.windows.isEmpty) return const SizedBox.shrink();
+    return Column(
+      children: [
+        // Phone-screen-shaped viewport: the picture slides inside it.
+        Container(
+          color: Colors.black,
+          constraints: const BoxConstraints(maxHeight: 240),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          alignment: Alignment.center,
+          child: AspectRatio(
+            aspectRatio: widget.screenAspect,
+            child: LayoutBuilder(
+              builder: (context, c) {
+                final vw = c.maxWidth;
+                final vh = c.maxHeight;
+                final disp = _disp(vw, vh);
+                final left = vw / 2 - _fx * disp.w;
+                final top = vh / 2 - _fy * disp.h;
+                return GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onPanStart: (_) => _panStart(),
+                  onPanUpdate: (d) => _panBy(d.delta, vw, vh),
+                  onPanEnd: (_) => _panEnd(),
+                  onPanCancel: () => setState(() => _dragging = false),
+                  child: ClipRect(
+                    child: Stack(
+                      children: [
+                        Positioned(
+                          left: left,
+                          top: top,
+                          width: disp.w,
+                          height: disp.h,
+                          child: AssetEntityImage(
+                            widget.asset,
+                            isOriginal: false,
+                            thumbnailSize: ThumbnailSize.square(1080),
+                            thumbnailFormat: ThumbnailFormat.jpeg,
+                            fit: BoxFit.fill,
+                            errorBuilder: (context, error, stack) =>
+                                const ColoredBox(color: Colors.black),
+                          ),
+                        ),
+                        if (_dragging)
+                          const Positioned.fill(
+                            child: IgnorePointer(
+                              child: CustomPaint(painter: _ViewportGuides()),
+                            ),
+                          ),
+                        Positioned.fill(
+                          child: IgnorePointer(
+                            child: DecoratedBox(
+                              decoration: BoxDecoration(
+                                border: Border.all(
+                                  color: WallpaperSequencePage.colorFor(_sel),
+                                  width: 2.5,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        // Whole-image strip with every window outline; tap to pick which one
+        // the viewport edits.
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
+          child: LayoutBuilder(
+            builder: (context, c) {
+              final stripH = (c.maxWidth / widget.imgAspect).clamp(40.0, 90.0);
+              return SizedBox(
+                width: c.maxWidth,
+                height: stripH,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTapDown: (d) {
+                    final nx = (d.localPosition.dx / c.maxWidth).clamp(0.0, 1.0);
+                    final ny = (d.localPosition.dy / stripH).clamp(0.0, 1.0);
+                    setState(() => _selected = _nearestWindow(nx, ny));
+                  },
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: Stack(
+                      fit: StackFit.expand,
+                      children: [
+                        AssetEntityImage(
+                          widget.asset,
+                          isOriginal: false,
+                          thumbnailSize: ThumbnailSize.square(480),
+                          thumbnailFormat: ThumbnailFormat.jpeg,
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stack) =>
+                              const ColoredBox(color: Colors.black),
+                        ),
+                        CustomPaint(
+                          painter: _MiniOverviewPainter(
+                            windows: widget.windows,
+                            imgAspect: widget.imgAspect,
+                            screenAspect: widget.screenAspect,
+                            selected: _sel,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.only(top: 4),
+          child: Text(
+            '正在調整：視窗 ${_sel + 1} / ${widget.windows.length}',
+            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ),
+      ],
+    );
   }
 
   int _nearestWindow(double nx, double ny) {
@@ -268,8 +441,7 @@ class _OverviewState extends State<_Overview> {
     var bestDist = double.infinity;
     for (var i = 0; i < widget.windows.length; i++) {
       final w = widget.windows[i];
-      // Weight X more than Y (strips usually differ horizontally).
-      final dx = (w.focusX - nx) * 1.0;
+      final dx = (w.focusX - nx);
       final dy = (w.focusY - ny) * 0.5;
       final d = dx * dx + dy * dy;
       if (d < bestDist) {
@@ -279,124 +451,53 @@ class _OverviewState extends State<_Overview> {
     }
     return best;
   }
+}
 
-  void _start(double nx, double ny) {
-    if (widget.windows.isEmpty) return;
-    final i = _nearestWindow(nx, ny);
-    final w = widget.windows[i];
-    final h = _visibleHalf(w, widget.imgAspect, widget.screenAspect);
-    setState(() {
-      _grabbed = i;
-      _liveX = _clampFocus(nx, h.halfW);
-      _liveY = _clampFocus(ny, h.halfH);
-    });
-  }
+class _ViewportGuides extends CustomPainter {
+  const _ViewportGuides();
 
-  void _move(double nx, double ny) {
-    if (_grabbed < 0) return;
-    final w = widget.windows[_grabbed];
-    final h = _visibleHalf(w, widget.imgAspect, widget.screenAspect);
-    setState(() {
-      _liveX = _clampFocus(nx, h.halfW);
-      _liveY = _clampFocus(ny, h.halfH);
-    });
-  }
-
-  void _end() {
-    if (_grabbed >= 0 && _grabbed < widget.windows.length) {
-      final w = widget.windows[_grabbed];
-      widget.onWindowMoved(
-        _grabbed,
-        CropWindow(zoom: w.zoom, focusX: _liveX, focusY: _liveY),
-      );
+  @override
+  void paint(Canvas canvas, Size size) {
+    final thirds = Paint()
+      ..color = Colors.white.withValues(alpha: 0.35)
+      ..strokeWidth = 1;
+    for (var i = 1; i <= 2; i++) {
+      final x = size.width * i / 3;
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), thirds);
+      final y = size.height * i / 3;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), thirds);
     }
-    setState(() => _grabbed = -1);
+    final center = Paint()
+      ..color = const Color(0xFFFFCA28).withValues(alpha: 0.7)
+      ..strokeWidth = 1.4;
+    canvas.drawLine(
+        Offset(size.width / 2, 0), Offset(size.width / 2, size.height), center);
+    canvas.drawLine(Offset(0, size.height / 2),
+        Offset(size.width, size.height / 2), center);
   }
 
   @override
-  Widget build(BuildContext context) {
-    // While dragging, show the grabbed window at its live position.
-    final effective = List<CropWindow>.from(widget.windows);
-    if (_grabbed >= 0 && _grabbed < effective.length) {
-      effective[_grabbed] = CropWindow(
-        zoom: effective[_grabbed].zoom,
-        focusX: _liveX,
-        focusY: _liveY,
-      );
-    }
-    return Container(
-      color: Colors.black,
-      constraints: const BoxConstraints(maxHeight: 260),
-      padding: const EdgeInsets.all(8),
-      alignment: Alignment.center,
-      child: AspectRatio(
-        aspectRatio: widget.imgAspect,
-        child: LayoutBuilder(
-          builder: (context, constraints) {
-            final w = constraints.maxWidth;
-            final h = constraints.maxHeight;
-            double nx(double dx) => (w > 0 ? dx / w : 0.5).clamp(0.0, 1.0);
-            double ny(double dy) => (h > 0 ? dy / h : 0.5).clamp(0.0, 1.0);
-            return GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onPanStart: (d) =>
-                  _start(nx(d.localPosition.dx), ny(d.localPosition.dy)),
-              onPanUpdate: (d) =>
-                  _move(nx(d.localPosition.dx), ny(d.localPosition.dy)),
-              onPanEnd: (_) => _end(),
-              onPanCancel: _end,
-              child: Stack(
-                fit: StackFit.expand,
-                children: [
-                  AssetEntityImage(
-                    widget.asset,
-                    isOriginal: false,
-                    thumbnailSize: ThumbnailSize.square(720),
-                    thumbnailFormat: ThumbnailFormat.jpeg,
-                    fit: BoxFit.cover,
-                    errorBuilder: (context, error, stack) => const ColoredBox(
-                      color: Colors.black,
-                      child: Icon(Icons.broken_image_outlined,
-                          color: Colors.white54, size: 40),
-                    ),
-                  ),
-                  CustomPaint(
-                    painter: _WindowsPainter(
-                      windows: effective,
-                      imgAspect: widget.imgAspect,
-                      screenAspect: widget.screenAspect,
-                      grabbed: _grabbed,
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        ),
-      ),
-    );
-  }
+  bool shouldRepaint(covariant _ViewportGuides oldDelegate) => false;
 }
 
-class _WindowsPainter extends CustomPainter {
-  _WindowsPainter({
+class _MiniOverviewPainter extends CustomPainter {
+  _MiniOverviewPainter({
     required this.windows,
     required this.imgAspect,
     required this.screenAspect,
-    required this.grabbed,
+    required this.selected,
   });
 
   final List<CropWindow> windows;
   final double imgAspect;
   final double screenAspect;
-  final int grabbed;
+  final int selected;
 
   @override
   void paint(Canvas canvas, Size size) {
     for (var i = 0; i < windows.length; i++) {
       final color = WallpaperSequencePage.colorFor(i);
-      final active = i == grabbed;
-      final dim = grabbed >= 0 && !active;
+      final active = i == selected;
       final r = windowRect(windows[i], imgAspect, screenAspect);
       final rect = Rect.fromLTRB(
         r.left * size.width,
@@ -408,99 +509,26 @@ class _WindowsPainter extends CustomPainter {
         rect,
         Paint()
           ..style = PaintingStyle.stroke
-          ..strokeWidth = active ? 3.5 : 2.5
-          ..color = dim ? color.withValues(alpha: 0.35) : color,
+          ..strokeWidth = active ? 3 : 1.6
+          ..color = active ? color : color.withValues(alpha: 0.7),
       );
-      canvas.drawRect(
-        rect,
-        Paint()
-          ..style = PaintingStyle.fill
-          ..color = color.withValues(alpha: active ? 0.22 : (dim ? 0.05 : 0.12)),
-      );
-      _drawBadge(canvas, '${i + 1}', rect.left + 2, rect.top + 2, color);
+      if (active) {
+        canvas.drawRect(
+          rect,
+          Paint()
+            ..style = PaintingStyle.fill
+            ..color = color.withValues(alpha: 0.18),
+        );
+      }
     }
-
-    if (grabbed >= 0 && grabbed < windows.length) {
-      _drawGuides(canvas, size);
-      final w = windows[grabbed];
-      _drawText(
-        canvas,
-        '左 ${(w.focusX * 100).round()}%',
-        6,
-        size.height - 22,
-        color: Colors.white,
-        fontSize: 12,
-        background: Colors.black.withValues(alpha: 0.5),
-      );
-    }
-  }
-
-  void _drawGuides(Canvas canvas, Size size) {
-    final thirds = Paint()
-      ..color = Colors.white.withValues(alpha: 0.30)
-      ..strokeWidth = 1;
-    for (var i = 1; i <= 2; i++) {
-      final x = size.width * i / 3;
-      canvas.drawLine(Offset(x, 0), Offset(x, size.height), thirds);
-      final y = size.height * i / 3;
-      canvas.drawLine(Offset(0, y), Offset(size.width, y), thirds);
-    }
-    final center = Paint()
-      ..color = const Color(0xFFFFCA28).withValues(alpha: 0.6)
-      ..strokeWidth = 1.2;
-    canvas.drawLine(
-        Offset(size.width / 2, 0), Offset(size.width / 2, size.height), center);
-    canvas.drawLine(Offset(0, size.height / 2),
-        Offset(size.width, size.height / 2), center);
-  }
-
-  void _drawBadge(
-      Canvas canvas, String text, double x, double y, Color color) {
-    final tp = _layout(text, Colors.white, 12, bold: true);
-    final badge = Rect.fromLTWH(x, y, tp.width + 10, tp.height + 4);
-    canvas.drawRRect(
-      RRect.fromRectAndRadius(badge, const Radius.circular(4)),
-      Paint()..color = color,
-    );
-    tp.paint(canvas, Offset(badge.left + 5, badge.top + 2));
-  }
-
-  void _drawText(Canvas canvas, String text, double x, double y,
-      {required Color color, required double fontSize, Color? background}) {
-    final tp = _layout(text, color, fontSize);
-    if (background != null) {
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(
-          Rect.fromLTWH(x - 3, y - 2, tp.width + 6, tp.height + 4),
-          const Radius.circular(3),
-        ),
-        Paint()..color = background,
-      );
-    }
-    tp.paint(canvas, Offset(x, y));
-  }
-
-  TextPainter _layout(String text, Color color, double fontSize,
-      {bool bold = false}) {
-    return TextPainter(
-      text: TextSpan(
-        text: text,
-        style: TextStyle(
-          color: color,
-          fontSize: fontSize,
-          fontWeight: bold ? FontWeight.bold : FontWeight.normal,
-        ),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
   }
 
   @override
-  bool shouldRepaint(covariant _WindowsPainter old) =>
+  bool shouldRepaint(covariant _MiniOverviewPainter old) =>
       old.windows != windows ||
+      old.selected != selected ||
       old.imgAspect != imgAspect ||
-      old.screenAspect != screenAspect ||
-      old.grabbed != grabbed;
+      old.screenAspect != screenAspect;
 }
 
 class _WindowTile extends StatelessWidget {
@@ -575,7 +603,7 @@ class _WindowTile extends StatelessWidget {
         children: [
           IconButton(
             icon: const Icon(Icons.crop),
-            tooltip: '編輯視窗',
+            tooltip: '放大編輯（可縮放）',
             visualDensity: VisualDensity.compact,
             onPressed: onEdit,
           ),
