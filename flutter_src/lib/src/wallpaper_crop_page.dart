@@ -274,6 +274,20 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                     const IgnorePointer(
                       child: CustomPaint(painter: _GuidesPainter()),
                     ),
+                    // The image's own edges, live-updated as you pan/zoom. Each
+                    // edge turns green when it lines up with the crop frame edge.
+                    IgnorePointer(
+                      child: AnimatedBuilder(
+                        animation: _transform,
+                        builder: (context, _) => CustomPaint(
+                          painter: _ImageEdgePainter(
+                            matrix: _transform.value,
+                            cw: _cw,
+                            ch: _ch,
+                          ),
+                        ),
+                      ),
+                    ),
                     IgnorePointer(
                       child: DecoratedBox(
                         decoration: BoxDecoration(
@@ -289,8 +303,8 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Text(
-              '黃色外框是螢幕（桌布）邊界；九宮格與中央十字線幫你對齊。'
-              '雙指縮放平移，放開手時會自動貼齊正中／完整／滿版，框內就是這個視窗顯示的範圍。',
+              '黃色外框是螢幕（桌布）邊界，青色線是圖片邊緣——當某條邊貼齊時會變綠色。'
+              '九宮格與中央十字線幫你對齊；放開手會自動貼齊正中／完整／滿版。',
               style: TextStyle(color: Colors.white70, fontSize: 12),
               textAlign: TextAlign.center,
             ),
@@ -435,4 +449,54 @@ class _GuidesPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _GuidesPainter oldDelegate) => false;
+}
+
+/// Draws the original image's own edges (as transformed by the current pan/zoom)
+/// over the crop frame. Each edge turns green when it lines up with the matching
+/// crop-frame edge, so you can tell exactly when the crop sits flush against the
+/// picture's border. Drawn outside the capture boundary, so it is never saved.
+class _ImageEdgePainter extends CustomPainter {
+  _ImageEdgePainter({required this.matrix, required this.cw, required this.ch});
+
+  final Matrix4 matrix;
+  final double cw;
+  final double ch;
+
+  static const Color _edge = Color(0xFF26C6DA); // cyan
+  static const Color _aligned = Color(0xFF66BB6A); // green
+  static const double _tol = 2.5;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (cw <= 0 || ch <= 0) return;
+    final z = matrix.getMaxScaleOnAxis();
+    final t = matrix.getTranslation();
+    final left = t.x;
+    final top = t.y;
+    final right = t.x + z * cw;
+    final bottom = t.y + z * ch;
+
+    Paint edgePaint(bool alignedEdge) => Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = alignedEdge ? 3.0 : 2.0
+      ..color = alignedEdge ? _aligned : _edge;
+
+    final leftFlush = (left - 0).abs() < _tol;
+    final rightFlush = (right - size.width).abs() < _tol;
+    final topFlush = (top - 0).abs() < _tol;
+    final bottomFlush = (bottom - size.height).abs() < _tol;
+
+    canvas.drawLine(
+        Offset(left, top), Offset(right, top), edgePaint(topFlush));
+    canvas.drawLine(
+        Offset(left, bottom), Offset(right, bottom), edgePaint(bottomFlush));
+    canvas.drawLine(
+        Offset(left, top), Offset(left, bottom), edgePaint(leftFlush));
+    canvas.drawLine(
+        Offset(right, top), Offset(right, bottom), edgePaint(rightFlush));
+  }
+
+  @override
+  bool shouldRepaint(covariant _ImageEdgePainter old) =>
+      old.matrix != matrix || old.cw != cw || old.ch != ch;
 }
