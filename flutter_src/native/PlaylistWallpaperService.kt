@@ -55,6 +55,8 @@ class PlaylistWallpaperService : WallpaperService() {
         private var loops = 1
         private var shuffle = false
         private var pos = 0
+        // Last home-screen page index seen from onOffsetsChanged; -1 = unsynced.
+        private var lastPage = -1
 
         private var visible = false
         private var surfaceW = 0
@@ -141,14 +143,15 @@ class PlaylistWallpaperService : WallpaperService() {
             }
         }
 
-        /// Home-screen horizontal swipe. The launcher reports how far the user
-        /// has scrolled between home pages as [xOffset] in 0..1; we map that
-        /// across the flattened window order so swiping right steps to the next
-        /// window (left steps back). A manual step resets the auto-advance
-        /// countdown so the picture doesn't jump again immediately.
+        /// Home-screen horizontal swipe. Each time the launcher moves to a
+        /// different home page we step the window by one (wrapping), rather than
+        /// mapping the raw scroll fraction onto the window index. That keeps the
+        /// window count independent of the number of home pages — e.g. 3 windows
+        /// on a 2-page launcher still cycle one-per-swipe — and avoids flashing
+        /// intermediate windows mid-swipe.
         ///
-        /// Launchers that lock wallpaper scrolling never call this (xOffset
-        /// stays constant); playback then relies on the timed advance instead.
+        /// Launchers that lock wallpaper scrolling never call this (the page
+        /// never changes), so the picture simply stays put until swiped.
         override fun onOffsetsChanged(
             xOffset: Float,
             yOffset: Float,
@@ -159,13 +162,22 @@ class PlaylistWallpaperService : WallpaperService() {
         ) {
             val n = order.size
             if (!visible || n <= 1) return
-            val clamped = if (xOffset.isNaN()) 0f else xOffset.coerceIn(0f, 1f)
-            val target = Math.round(clamped * (n - 1))
-            if (target != pos) {
-                pos = target
-                handler.removeCallbacks(nextItem)
-                playCurrent(0)
+            // Discrete home page = scroll fraction / per-page step, rounded.
+            val step = if (xOffsetStep.isNaN() || xOffsetStep <= 0f) 1f else xOffsetStep
+            val x = if (xOffset.isNaN()) 0f else xOffset.coerceIn(0f, 1f)
+            val page = Math.round(x / step)
+            if (lastPage < 0) {
+                lastPage = page
+                return
             }
+            if (page == lastPage) return
+            val delta = page - lastPage
+            lastPage = page
+            var next = (pos + delta) % n
+            if (next < 0) next += n
+            pos = next
+            handler.removeCallbacks(nextItem)
+            playCurrent(0)
         }
 
         override fun onSurfaceDestroyed(holder: SurfaceHolder) {
@@ -286,6 +298,8 @@ class PlaylistWallpaperService : WallpaperService() {
             }
             order = buildOrder(items, shuffle)
             if (pos !in order.indices) pos = 0
+            // Re-sync page tracking; the next offset event just records the page.
+            lastPage = -1
         }
 
         /// Builds the playback order. Windows are grouped by their source item;
