@@ -12,9 +12,10 @@ import 'wallpaper_playlist.dart';
 /// (it does NOT auto-advance on a timer).
 ///
 /// The top panel shows the whole image once with every window's crop outline
-/// drawn on it (numbered in order), so the sequence is legible at a glance.
-/// Below it the windows can be added, edited (via the crop picker), reordered
-/// and deleted. At least one window is always kept.
+/// drawn on it (numbered in order); drag it left/right to scrub, which reveals
+/// alignment guides and a percentage ruler. Below it the windows can be added,
+/// auto-sliced, edited (via the crop picker), reordered and deleted. At least
+/// one window is always kept.
 class WallpaperSequencePage extends StatelessWidget {
   const WallpaperSequencePage({
     super.key,
@@ -67,12 +68,66 @@ class WallpaperSequencePage extends StatelessWidget {
     }
   }
 
+  /// Full-height, screen-width strips tiled left→right to cover the whole image
+  /// (centred), so swiping pans across the entire wide picture. zoom = 1.0 is
+  /// exactly "fill height, crop width" in the crop transform space.
+  static List<CropWindow> autoSliceWindows(
+      double imgAspect, double screenAspect) {
+    // Fraction of the image width one full-height strip shows.
+    final visible = screenAspect / imgAspect;
+    if (visible <= 0 || visible >= 0.999) {
+      return [CropWindow(zoom: 1.0)];
+    }
+    final n = (1 / visible).ceil().clamp(2, 12);
+    final windows = <CropWindow>[];
+    for (var i = 0; i < n; i++) {
+      // Spread focus so strip 0 is flush-left and strip n-1 flush-right.
+      final fx = visible / 2 + i * (1 - visible) / (n - 1);
+      windows.add(CropWindow(zoom: 1.0, focusX: fx, focusY: 0.5));
+    }
+    return windows;
+  }
+
+  Future<void> _autoSlice(
+      BuildContext context, double imgAspect, double screenAspect) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final windows = autoSliceWindows(imgAspect, screenAspect);
+    if (windows.length < 2) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('這張圖沒有比螢幕寬，用不到左右切片。'),
+      ));
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('自動切片'),
+        content: Text(
+          '會把這張圖切成 ${windows.length} 個「滿高、螢幕寬」的視窗，'
+          '由左到右覆蓋整張圖，取代目前的視窗設定。要繼續嗎？',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('切片')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await WallpaperPlaylist.setWindows(target, asset.id, windows);
+      messenger.showSnackBar(
+          SnackBar(content: Text('已切成 ${windows.length} 個視窗，左右滑動看完整張圖')));
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
-    final screenAspect = mq.size.height > 0
-        ? mq.size.width / mq.size.height
-        : 0.5;
+    final screenAspect =
+        mq.size.height > 0 ? mq.size.width / mq.size.height : 0.5;
     final iw = asset.width.toDouble();
     final ih = asset.height.toDouble();
     final imgAspect = (iw > 0 && ih > 0) ? iw / ih : 1.0;
@@ -80,6 +135,13 @@ class WallpaperSequencePage extends StatelessWidget {
     return Scaffold(
       appBar: AppBar(
         title: Text('視窗序列（${target.label}）'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.view_column_outlined),
+            tooltip: '自動切片（寬圖左右可滑）',
+            onPressed: () => _autoSlice(context, imgAspect, screenAspect),
+          ),
+        ],
       ),
       body: ValueListenableBuilder<List<WallpaperItem>>(
         valueListenable: WallpaperPlaylist.listFor(target),
@@ -101,8 +163,9 @@ class WallpaperSequencePage extends StatelessWidget {
               const Padding(
                 padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
                 child: Text(
-                  '每個「視窗」是這張圖的一塊顯示範圍，播放時在主畫面用左滑／右滑依序切換'
-                  '（不會自動換）。上圖用對應顏色標出每個視窗的裁切框；長按右側把手可調整順序。',
+                  '每個「視窗」是這張圖的一塊顯示範圍，主畫面左滑／右滑依序切換（不會自動換）。'
+                  '上圖用對應顏色標出各視窗；用手指左右滑動上圖可檢視，會顯示輔助線與刻度。'
+                  '寬圖想整張看完，按右上角「自動切片」。',
                   style: TextStyle(fontSize: 12),
                 ),
               ),
@@ -168,7 +231,7 @@ Rect windowRect(CropWindow w, double imgAspect, double screenAspect) {
   );
 }
 
-class _Overview extends StatelessWidget {
+class _Overview extends StatefulWidget {
   const _Overview({
     required this.asset,
     required this.windows,
@@ -182,6 +245,25 @@ class _Overview extends StatelessWidget {
   final double screenAspect;
 
   @override
+  State<_Overview> createState() => _OverviewState();
+}
+
+class _OverviewState extends State<_Overview> {
+  bool _dragging = false;
+  double _dragX = 0.5; // normalized 0..1
+
+  void _setDrag(double x) {
+    setState(() {
+      _dragging = true;
+      _dragX = x.clamp(0.0, 1.0);
+    });
+  }
+
+  void _endDrag() {
+    setState(() => _dragging = false);
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Container(
       color: Colors.black,
@@ -189,30 +271,46 @@ class _Overview extends StatelessWidget {
       padding: const EdgeInsets.all(8),
       alignment: Alignment.center,
       child: AspectRatio(
-        aspectRatio: imgAspect,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            AssetEntityImage(
-              asset,
-              isOriginal: false,
-              thumbnailSize: ThumbnailSize.square(720),
-              thumbnailFormat: ThumbnailFormat.jpeg,
-              fit: BoxFit.cover,
-              errorBuilder: (context, error, stack) => const ColoredBox(
-                color: Colors.black,
-                child: Icon(Icons.broken_image_outlined,
-                    color: Colors.white54, size: 40),
+        aspectRatio: widget.imgAspect,
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final w = constraints.maxWidth;
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragStart: (d) =>
+                  _setDrag(w > 0 ? d.localPosition.dx / w : 0.5),
+              onHorizontalDragUpdate: (d) =>
+                  _setDrag(w > 0 ? d.localPosition.dx / w : 0.5),
+              onHorizontalDragEnd: (_) => _endDrag(),
+              onHorizontalDragCancel: _endDrag,
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  AssetEntityImage(
+                    widget.asset,
+                    isOriginal: false,
+                    thumbnailSize: ThumbnailSize.square(720),
+                    thumbnailFormat: ThumbnailFormat.jpeg,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stack) => const ColoredBox(
+                      color: Colors.black,
+                      child: Icon(Icons.broken_image_outlined,
+                          color: Colors.white54, size: 40),
+                    ),
+                  ),
+                  CustomPaint(
+                    painter: _WindowsPainter(
+                      windows: widget.windows,
+                      imgAspect: widget.imgAspect,
+                      screenAspect: widget.screenAspect,
+                      dragging: _dragging,
+                      dragX: _dragX,
+                    ),
+                  ),
+                ],
               ),
-            ),
-            CustomPaint(
-              painter: _WindowsPainter(
-                windows: windows,
-                imgAspect: imgAspect,
-                screenAspect: screenAspect,
-              ),
-            ),
-          ],
+            );
+          },
         ),
       ),
     );
@@ -224,14 +322,19 @@ class _WindowsPainter extends CustomPainter {
     required this.windows,
     required this.imgAspect,
     required this.screenAspect,
+    required this.dragging,
+    required this.dragX,
   });
 
   final List<CropWindow> windows;
   final double imgAspect;
   final double screenAspect;
+  final bool dragging;
+  final double dragX;
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Crop rectangles, one per window.
     for (var i = 0; i < windows.length; i++) {
       final color = WallpaperSequencePage.colorFor(i);
       final r = windowRect(windows[i], imgAspect, screenAspect);
@@ -241,49 +344,135 @@ class _WindowsPainter extends CustomPainter {
         r.right * size.width,
         r.bottom * size.height,
       );
-      final stroke = Paint()
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2.5
-        ..color = color;
-      canvas.drawRect(rect, stroke);
+      canvas.drawRect(
+        rect,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 2.5
+          ..color = color,
+      );
       canvas.drawRect(
         rect,
         Paint()
           ..style = PaintingStyle.fill
           ..color = color.withValues(alpha: 0.12),
       );
-
-      // Numbered badge at the rectangle's top-left corner.
-      final tp = TextPainter(
-        text: TextSpan(
-          text: '${i + 1}',
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 12,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      final badge = Rect.fromLTWH(
-        rect.left + 2,
-        rect.top + 2,
-        tp.width + 10,
-        tp.height + 4,
-      );
-      canvas.drawRRect(
-        RRect.fromRectAndRadius(badge, const Radius.circular(4)),
-        Paint()..color = color,
-      );
-      tp.paint(canvas, Offset(badge.left + 5, badge.top + 2));
+      _drawBadge(canvas, '${i + 1}', rect.left + 2, rect.top + 2, color);
     }
+
+    if (dragging) {
+      _drawGuides(canvas, size);
+      _drawRuler(canvas, size);
+      _drawPlayhead(canvas, size);
+    }
+  }
+
+  void _drawGuides(Canvas canvas, Size size) {
+    final thirds = Paint()
+      ..color = Colors.white.withValues(alpha: 0.30)
+      ..strokeWidth = 1;
+    for (var i = 1; i <= 2; i++) {
+      final x = size.width * i / 3;
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), thirds);
+      final y = size.height * i / 3;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), thirds);
+    }
+    final center = Paint()
+      ..color = const Color(0xFFFFCA28).withValues(alpha: 0.6)
+      ..strokeWidth = 1.2;
+    canvas.drawLine(Offset(0, size.height / 2),
+        Offset(size.width, size.height / 2), center);
+  }
+
+  /// Percentage scale along the top edge.
+  void _drawRuler(Canvas canvas, Size size) {
+    canvas.drawRect(
+      Rect.fromLTWH(0, 0, size.width, 16),
+      Paint()..color = Colors.black.withValues(alpha: 0.45),
+    );
+    final tick = Paint()
+      ..color = Colors.white.withValues(alpha: 0.8)
+      ..strokeWidth = 1;
+    for (var p = 0; p <= 100; p += 10) {
+      final x = size.width * p / 100;
+      final major = p % 25 == 0;
+      canvas.drawLine(Offset(x, 0), Offset(x, major ? 10 : 6), tick);
+      if (major) {
+        _drawText(canvas, '$p', x + 2, 3,
+            color: Colors.white, fontSize: 9);
+      }
+    }
+  }
+
+  void _drawPlayhead(Canvas canvas, Size size) {
+    final x = dragX * size.width;
+    canvas.drawLine(
+      Offset(x, 0),
+      Offset(x, size.height),
+      Paint()
+        ..color = Colors.white
+        ..strokeWidth = 1.6,
+    );
+    final pct = (dragX * 100).round();
+    _drawText(
+      canvas,
+      '$pct%',
+      (x + 4).clamp(0.0, size.width - 34),
+      size.height - 20,
+      color: Colors.white,
+      fontSize: 12,
+      background: Colors.black.withValues(alpha: 0.5),
+    );
+  }
+
+  void _drawBadge(
+      Canvas canvas, String text, double x, double y, Color color) {
+    final tp = _layout(text, Colors.white, 12, bold: true);
+    final badge = Rect.fromLTWH(x, y, tp.width + 10, tp.height + 4);
+    canvas.drawRRect(
+      RRect.fromRectAndRadius(badge, const Radius.circular(4)),
+      Paint()..color = color,
+    );
+    tp.paint(canvas, Offset(badge.left + 5, badge.top + 2));
+  }
+
+  void _drawText(Canvas canvas, String text, double x, double y,
+      {required Color color, required double fontSize, Color? background}) {
+    final tp = _layout(text, color, fontSize);
+    if (background != null) {
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(x - 3, y - 2, tp.width + 6, tp.height + 4),
+          const Radius.circular(3),
+        ),
+        Paint()..color = background,
+      );
+    }
+    tp.paint(canvas, Offset(x, y));
+  }
+
+  TextPainter _layout(String text, Color color, double fontSize,
+      {bool bold = false}) {
+    return TextPainter(
+      text: TextSpan(
+        text: text,
+        style: TextStyle(
+          color: color,
+          fontSize: fontSize,
+          fontWeight: bold ? FontWeight.bold : FontWeight.normal,
+        ),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
   }
 
   @override
   bool shouldRepaint(covariant _WindowsPainter old) =>
       old.windows != windows ||
       old.imgAspect != imgAspect ||
-      old.screenAspect != screenAspect;
+      old.screenAspect != screenAspect ||
+      old.dragging != dragging ||
+      old.dragX != dragX;
 }
 
 class _WindowTile extends StatelessWidget {
