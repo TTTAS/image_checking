@@ -105,6 +105,7 @@ class NativeWallpaper {
     required int liveSeconds,
     required int loops,
     required bool shuffle,
+    required int intervalMinutes,
   }) async {
     await _channel.invokeMethod<int>('applyLive', {
       'homeItems': homeItems,
@@ -112,6 +113,7 @@ class NativeWallpaper {
       'seconds': liveSeconds,
       'loops': loops,
       'shuffle': shuffle,
+      'intervalMinutes': intervalMinutes,
     });
   }
 

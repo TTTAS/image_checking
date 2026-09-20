@@ -128,7 +128,7 @@ class WallpaperItem {
 class WallpaperSettings {
   WallpaperSettings({
     this.live = false,
-    this.intervalMinutes = 60,
+    this.intervalMinutes = 5,
     this.shuffle = false,
     this.liveSeconds = 30,
     this.loopsBeforeNext = 1,
@@ -165,7 +165,7 @@ class WallpaperSettings {
 
   static WallpaperSettings fromJson(Map<String, dynamic> j) => WallpaperSettings(
         live: (j['live'] as bool?) ?? false,
-        intervalMinutes: (j['intervalMinutes'] as int?) ?? 60,
+        intervalMinutes: (j['intervalMinutes'] as int?) ?? 5,
         shuffle: (j['shuffle'] as bool?) ?? false,
         liveSeconds: (j['liveSeconds'] as int?) ?? 30,
         loopsBeforeNext: (j['loopsBeforeNext'] as int?) ?? 1,

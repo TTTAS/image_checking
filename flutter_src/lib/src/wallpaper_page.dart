@@ -244,17 +244,20 @@ class _WallpaperPageState extends State<WallpaperPage>
     }
     try {
       final secs = s.liveSeconds <= 0 ? 30 : s.liveSeconds;
+      final mins = s.intervalMinutes <= 0 ? 5 : s.intervalMinutes;
       await NativeWallpaper.applyLive(
         homeItems: homeItems,
         lockItems: lockItems,
         liveSeconds: secs,
         loops: s.loopsBeforeNext,
         shuffle: s.shuffle,
+        intervalMinutes: mins,
       );
       await NativeWallpaper.openLiveWallpaperPreview();
       if (!mounted) return;
       messenger.showSnackBar(SnackBar(
-        content: Text('請在系統預覽按「設定」，並選擇主畫面或主畫面與鎖定畫面；每 $secs 秒換下一項。'),
+        content: Text(
+            '請在系統預覽按「設定」，並選擇主畫面或主畫面與鎖定畫面；左右滑動切換視窗，多張桌布每 ${_intervalText(mins)}自動輪換。'),
       ));
     } on PlatformException catch (e) {
       messenger.showSnackBar(
@@ -341,11 +344,6 @@ class _WallpaperPageState extends State<WallpaperPage>
       appBar: AppBar(
         title: const Text('輪播桌布'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.tune),
-            tooltip: '設定',
-            onPressed: _openSettings,
-          ),
           PopupMenuButton<String>(
             onSelected: (v) {
               if (v == 'clear') _confirmClear();
@@ -363,8 +361,8 @@ class _WallpaperPageState extends State<WallpaperPage>
           const Padding(
             padding: EdgeInsets.fromLTRB(12, 10, 12, 0),
             child: Text(
-              '圖片與影片可混合。套用後會開系統「動態桌布」預覽，請按設定並選擇主畫面或主畫面與鎖定畫面。'
-              '主畫面用左滑／右滑切換清單與各圖片的視窗，不會自動一張張換。',
+              '套用後會開系統「動態桌布」預覽，請按設定並選擇主畫面或主畫面與鎖定畫面。'
+              '主畫面左滑／右滑切換同一張圖的視窗；不同張桌布會依下方設定的間隔自動輪換。',
               style: TextStyle(fontSize: 12),
               textAlign: TextAlign.center,
             ),
@@ -390,6 +388,7 @@ class _WallpaperPageState extends State<WallpaperPage>
           ),
           Expanded(child: _list(_tab)),
           const Divider(height: 1),
+          const _ControlBar(),
           _ActionBar(onApply: _apply, onStop: _stop),
         ],
       ),
@@ -421,14 +420,6 @@ class _WallpaperPageState extends State<WallpaperPage>
     );
   }
 
-  void _openSettings() {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (_) => const _SettingsSheet(),
-    );
-  }
 }
 
 class _EmptyState extends StatelessWidget {
@@ -580,75 +571,68 @@ class _ActionBar extends StatelessWidget {
   }
 }
 
-class _SettingsSheet extends StatefulWidget {
-  const _SettingsSheet();
+/// Compact control row: a button to set how often different wallpapers rotate,
+/// plus a random-order toggle. Replaces the old settings sheet.
+class _ControlBar extends StatelessWidget {
+  const _ControlBar();
 
-  @override
-  State<_SettingsSheet> createState() => _SettingsSheetState();
-}
+  static const _options = [1, 3, 5, 10, 30, 60];
 
-class _SettingsSheetState extends State<_SettingsSheet> {
-  late WallpaperSettings _s;
+  static String intervalLabel(int m) {
+    if (m >= 60 && m % 60 == 0) return '${m ~/ 60} 小時';
+    return '$m 分鐘';
+  }
 
-  static const _intervals = <int, String>{
-    15: '約 15 分鐘',
-    60: '1 小時',
-    360: '6 小時',
-    1440: '每天',
-  };
-
-  @override
-  void initState() {
-    super.initState();
-    _s = WallpaperPlaylist.settings.value.copyWith();
+  Future<void> _pick(BuildContext context, WallpaperSettings s) async {
+    final chosen = await showDialog<int>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('多久自動換一張桌布'),
+        children: [
+          for (final m in _options)
+            ListTile(
+              title: Text(intervalLabel(m)),
+              trailing:
+                  s.intervalMinutes == m ? const Icon(Icons.check) : null,
+              onTap: () => Navigator.pop(ctx, m),
+            ),
+        ],
+      ),
+    );
+    if (chosen != null) {
+      await WallpaperPlaylist.updateSettings(
+          s.copyWith(intervalMinutes: chosen));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.only(bottom: 8),
-              child: Text('輪播設定',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-            ),
-            const Text('鎖定畫面靜態輪播間隔（最短約 15 分鐘）',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 8,
-              children: [
-                for (final e in _intervals.entries)
-                  ChoiceChip(
-                    label: Text(e.value),
-                    selected: _s.intervalMinutes == e.key,
-                    onSelected: (_) => setState(
-                        () => _s = _s.copyWith(intervalMinutes: e.key)),
-                  ),
-              ],
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('隨機順序'),
-              value: _s.shuffle,
-              onChanged: (v) => setState(() => _s = _s.copyWith(shuffle: v)),
-            ),
-            const SizedBox(height: 8),
-            FilledButton(
-              onPressed: () async {
-                await WallpaperPlaylist.updateSettings(_s);
-                if (context.mounted) Navigator.pop(context);
-              },
-              child: const Text('完成'),
-            ),
-          ],
-        ),
-      ),
+    return ValueListenableBuilder<WallpaperSettings>(
+      valueListenable: WallpaperPlaylist.settings,
+      builder: (context, s, _) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.timer_outlined),
+                  label: Text('自動換桌布：每 ${intervalLabel(s.intervalMinutes)}'),
+                  onPressed: () => _pick(context, s),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilterChip(
+                avatar: const Icon(Icons.shuffle, size: 18),
+                label: const Text('隨機'),
+                selected: s.shuffle,
+                onSelected: (v) =>
+                    WallpaperPlaylist.updateSettings(s.copyWith(shuffle: v)),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

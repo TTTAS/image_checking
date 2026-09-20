@@ -55,6 +55,12 @@ class PlaylistWallpaperService : WallpaperService() {
         private var loops = 1
         private var shuffle = false
         private var pos = 0
+        // Minutes between automatic rotations to the NEXT item (different image).
+        // Windows within one item are navigated by swipe only, never on a timer.
+        private var intervalMinutes = 5
+        // Number of distinct source items in the current list; only rotate when
+        // there is more than one (a single sliced image stays swipe-only).
+        private var groupCount = 1
         // Last home-screen page index seen from onOffsetsChanged; -1 = unsynced.
         private var lastPage = -1
 
@@ -70,13 +76,16 @@ class PlaylistWallpaperService : WallpaperService() {
         private var frameBitmap: Bitmap? = null
         private var playbackGeneration = 0
         private var firstVideoFrame = false
-        private val nextItem = Runnable { advance() }
+        // Timed rotation to the next item (different image).
+        private val nextItem = Runnable { advanceItem() }
+        // Throttled skip past a frame whose media failed to load.
+        private val skipBroken = Runnable { advance() }
         private val videoTimeout = Runnable {
             if (!firstVideoFrame && player != null) {
                 reportError("影片未能在 15 秒內輸出畫面")
                 releasePlayer()
                 drawFrame()
-                handler.postDelayed(nextItem, seconds * 1000L)
+                handler.postDelayed(skipBroken, 3000L)
             }
         }
         private var movieStart = 0L
@@ -256,6 +265,7 @@ class PlaylistWallpaperService : WallpaperService() {
                 seconds = root.optInt("seconds", 30).coerceAtLeast(1)
                 loops = root.optInt("loops", 1).coerceAtLeast(1)
                 shuffle = root.optBoolean("shuffle", false)
+                intervalMinutes = root.optInt("intervalMinutes", 5).coerceAtLeast(1)
                 // Backward compatibility with manifests written by older builds.
                 parseItems(
                     root.optJSONArray("homeItems") ?: root.optJSONArray("items"),
@@ -297,9 +307,25 @@ class PlaylistWallpaperService : WallpaperService() {
                 else -> lockItems
             }
             order = buildOrder(items, shuffle)
+            groupCount = items.map { it.group }.toSet().size
             if (pos !in order.indices) pos = 0
             // Re-sync page tracking; the next offset event just records the page.
             lastPage = -1
+        }
+
+        /// Timed rotation to the next item (a different image), keeping windows
+        /// swipe-only. No-op when there is only one item.
+        private fun advanceItem() {
+            if (order.size <= 1 || groupCount <= 1) return
+            val curGroup = items[order[pos]].group
+            for (i in 1..order.size) {
+                val idx = (pos + i) % order.size
+                if (items[order[idx]].group != curGroup) {
+                    pos = idx
+                    break
+                }
+            }
+            playCurrent(0)
         }
 
         /// Builds the playback order. Windows are grouped by their source item;
@@ -408,11 +434,14 @@ class PlaylistWallpaperService : WallpaperService() {
                 return
             }
 
-            // A window sequence is navigated by horizontal swipe only, so we do
-            // NOT auto-advance on a timer. [tick] just keeps animated frames
-            // (GIF/WebP) redrawing; still images stay put until the user swipes.
+            // Windows within one item are swipe-only; [tick] just keeps animated
+            // frames (GIF/WebP) redrawing. Different items rotate on a timer.
             if (player == null) {
                 handler.post(tick)
+            }
+            handler.removeCallbacks(nextItem)
+            if (groupCount > 1) {
+                handler.postDelayed(nextItem, intervalMinutes * 60_000L)
             }
         }
 
@@ -460,8 +489,7 @@ class PlaylistWallpaperService : WallpaperService() {
                         handler.removeCallbacks(videoTimeout)
                         releasePlayer()
                         drawFrame()
-                        handler.removeCallbacks(nextItem)
-                        handler.postDelayed(nextItem, seconds * 1000L)
+                        handler.postDelayed(skipBroken, 3000L)
                     }
                 }
             }
@@ -484,7 +512,7 @@ class PlaylistWallpaperService : WallpaperService() {
                         reportError("啟動影片失敗：${file.name}", e)
                         releasePlayer()
                         drawFrame()
-                        handler.postDelayed(nextItem, seconds * 1000L)
+                        handler.postDelayed(skipBroken, 3000L)
                     }
                 }
             }
@@ -494,8 +522,7 @@ class PlaylistWallpaperService : WallpaperService() {
                     handler.removeCallbacks(videoTimeout)
                     releasePlayer()
                     drawFrame()
-                    handler.removeCallbacks(nextItem)
-                    handler.postDelayed(nextItem, seconds * 1000L)
+                    handler.postDelayed(skipBroken, 3000L)
                 }
                 true
             }
