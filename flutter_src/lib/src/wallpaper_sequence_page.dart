@@ -6,15 +6,12 @@ import 'wallpaper_crop_page.dart';
 import 'wallpaper_playlist.dart';
 
 /// Editor for one playlist item's "window sequence": an ordered list of
-/// framings ([CropWindow]) of a single original image. The whole sequence is
-/// still one entry in the playlist; on the home screen the live wallpaper steps
-/// through the windows by left/right swipe (it does NOT auto-advance windows).
+/// framings ([CropWindow]) of a single original image. On the home screen the
+/// live wallpaper pans continuously between these windows as you swipe.
 ///
-/// The top panel is a phone-screen-shaped viewport that shows the selected
-/// window exactly as the wallpaper would; dragging pans the image inside it
-/// (the picture slides under a fixed frame) and updates that window's crop.
-/// Below it a thin strip shows the whole image with every window's crop outline
-/// (tap to select which window the viewport edits), then the reorderable list.
+/// The window list is the main view. A collapsible viewport at the top can be
+/// pulled out to fine-tune a window by dragging the picture inside a
+/// phone-shaped frame; tapping a list row opens the full-screen editor.
 class WallpaperSequencePage extends StatelessWidget {
   const WallpaperSequencePage({
     super.key,
@@ -159,17 +156,10 @@ class WallpaperSequencePage extends StatelessWidget {
                 onWindowMoved: (index, window) => WallpaperPlaylist.updateWindow(
                     target, asset.id, index, window),
               ),
-              const Padding(
-                padding: EdgeInsets.fromLTRB(16, 2, 16, 6),
-                child: Text(
-                  '上方視窗＝主畫面實際看到的畫面，手指在裡面滑動就是移動這張圖。'
-                  '下方細條可點選要調哪個視窗；主畫面左滑／右滑依序切換視窗。',
-                  style: TextStyle(fontSize: 12),
-                ),
-              ),
+              const Divider(height: 1),
               Expanded(
                 child: ReorderableListView.builder(
-                  padding: const EdgeInsets.only(bottom: 88),
+                  padding: const EdgeInsets.only(top: 4, bottom: 88),
                   itemCount: windows.length,
                   onReorder: (o, n) => WallpaperPlaylist.reorderWindows(
                       target, asset.id, o, n),
@@ -202,41 +192,13 @@ class WallpaperSequencePage extends StatelessWidget {
   }
 }
 
-/// Visible half-extent (normalized 0..1) of a window in each axis. Mirrors the
-/// crop transform math (zoom is a cover-space multiplier; <=0 means fit).
-({double halfW, double halfH}) _visibleHalf(
-    CropWindow w, double imgAspect, double screenAspect) {
-  const bw = 1.0;
-  final bh = bw / screenAspect;
-  double cw, ch;
-  if (imgAspect > screenAspect) {
-    ch = bh;
-    cw = bh * imgAspect;
-  } else {
-    cw = bw;
-    ch = bw / imgAspect;
-  }
-  final fitScale = (bw / cw < bh / ch) ? bw / cw : bh / ch;
-  final zoom = w.zoom <= 0 ? fitScale : w.zoom;
-  return (halfW: bw / (2 * zoom * cw), halfH: bh / (2 * zoom * ch));
-}
-
-Rect windowRect(CropWindow w, double imgAspect, double screenAspect) {
-  final h = _visibleHalf(w, imgAspect, screenAspect);
-  double clamp01(double v) => v < 0 ? 0 : (v > 1 ? 1 : v);
-  return Rect.fromLTRB(
-    clamp01(w.focusX - h.halfW),
-    clamp01(w.focusY - h.halfH),
-    clamp01(w.focusX + h.halfW),
-    clamp01(w.focusY + h.halfH),
-  );
-}
-
 double _clampFocus(double v, double half) {
   if (half >= 0.5) return 0.5;
   return v.clamp(half, 1 - half);
 }
 
+/// Collapsible "pull-out" fine-tune area. Collapsed by default so the window
+/// list has room; expand it to drag the picture inside a phone-shaped frame.
 class _PreviewPanel extends StatefulWidget {
   const _PreviewPanel({
     required this.asset,
@@ -257,44 +219,36 @@ class _PreviewPanel extends StatefulWidget {
 }
 
 class _PreviewPanelState extends State<_PreviewPanel> {
+  bool _expanded = false;
   int _selected = 0;
   bool _dragging = false;
   double _liveX = 0.5;
   double _liveY = 0.5;
 
   int get _sel => _selected.clamp(0, widget.windows.length - 1);
-
   CropWindow get _selWindow => widget.windows[_sel];
-
   double get _fx => _dragging ? _liveX : _selWindow.focusX;
   double get _fy => _dragging ? _liveY : _selWindow.focusY;
 
-  /// Displayed image size inside a [vw]x[vh] viewport for the current window.
   ({double w, double h}) _disp(double vw, double vh) {
     final a = widget.imgAspect;
-    final cover = (vw / a > vh) ? vw / a : vh; // max(vw/a, vh)
-    final contain = (vw / a < vh) ? vw / a : vh; // min(vw/a, vh)
-    final zoom = _selWindow.zoom <= 0 ? 1.0 : _selWindow.zoom;
-    final s = _selWindow.zoom <= 0 ? contain : cover * zoom;
+    final cover = (vw / a > vh) ? vw / a : vh;
+    final contain = (vw / a < vh) ? vw / a : vh;
+    final s = _selWindow.zoom <= 0 ? contain : cover * _selWindow.zoom;
     return (w: a * s, h: s);
   }
 
-  void _panStart() {
-    setState(() {
-      _dragging = true;
-      _liveX = _selWindow.focusX;
-      _liveY = _selWindow.focusY;
-    });
-  }
+  void _panStart() => setState(() {
+        _dragging = true;
+        _liveX = _selWindow.focusX;
+        _liveY = _selWindow.focusY;
+      });
 
   void _panBy(Offset delta, double vw, double vh) {
     final disp = _disp(vw, vh);
-    final halfX = (vw / 2) / disp.w;
-    final halfY = (vh / 2) / disp.h;
     setState(() {
-      // Dragging the picture right reveals its left side → focus moves left.
-      _liveX = _clampFocus(_liveX - delta.dx / disp.w, halfX);
-      _liveY = _clampFocus(_liveY - delta.dy / disp.h, halfY);
+      _liveX = _clampFocus(_liveX - delta.dx / disp.w, (vw / 2) / disp.w);
+      _liveY = _clampFocus(_liveY - delta.dy / disp.h, (vh / 2) / disp.h);
     });
   }
 
@@ -311,13 +265,55 @@ class _PreviewPanelState extends State<_PreviewPanel> {
   @override
   Widget build(BuildContext context) {
     if (widget.windows.isEmpty) return const SizedBox.shrink();
+    if (!_expanded) {
+      return InkWell(
+        onTap: () => setState(() => _expanded = true),
+        child: const Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            children: [
+              Icon(Icons.tune, size: 20),
+              SizedBox(width: 10),
+              Expanded(
+                child: Text('微調視窗位置（點開，在框內滑動移動圖片）',
+                    style: TextStyle(fontSize: 13)),
+              ),
+              Icon(Icons.expand_more),
+            ],
+          ),
+        ),
+      );
+    }
+    final n = widget.windows.length;
     return Column(
       children: [
-        // Phone-screen-shaped viewport: the picture slides inside it.
+        Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.chevron_left),
+              tooltip: '上一個視窗',
+              onPressed: _sel > 0 ? () => setState(() => _selected = _sel - 1) : null,
+            ),
+            Text('視窗 ${_sel + 1} / $n',
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            IconButton(
+              icon: const Icon(Icons.chevron_right),
+              tooltip: '下一個視窗',
+              onPressed:
+                  _sel < n - 1 ? () => setState(() => _selected = _sel + 1) : null,
+            ),
+            const Spacer(),
+            TextButton.icon(
+              onPressed: () => setState(() => _expanded = false),
+              icon: const Icon(Icons.expand_less),
+              label: const Text('收合'),
+            ),
+          ],
+        ),
         Container(
           color: Colors.black,
-          constraints: const BoxConstraints(maxHeight: 240),
-          padding: const EdgeInsets.symmetric(vertical: 8),
+          constraints: const BoxConstraints(maxHeight: 220),
+          padding: const EdgeInsets.only(bottom: 8),
           alignment: Alignment.center,
           child: AspectRatio(
             aspectRatio: widget.screenAspect,
@@ -378,78 +374,8 @@ class _PreviewPanelState extends State<_PreviewPanel> {
             ),
           ),
         ),
-        // Whole-image strip with every window outline; tap to pick which one
-        // the viewport edits.
-        Padding(
-          padding: const EdgeInsets.fromLTRB(8, 6, 8, 0),
-          child: LayoutBuilder(
-            builder: (context, c) {
-              final stripH = (c.maxWidth / widget.imgAspect).clamp(40.0, 90.0);
-              return SizedBox(
-                width: c.maxWidth,
-                height: stripH,
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTapDown: (d) {
-                    final nx = (d.localPosition.dx / c.maxWidth).clamp(0.0, 1.0);
-                    final ny = (d.localPosition.dy / stripH).clamp(0.0, 1.0);
-                    setState(() => _selected = _nearestWindow(nx, ny));
-                  },
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        AssetEntityImage(
-                          widget.asset,
-                          isOriginal: false,
-                          thumbnailSize: ThumbnailSize.square(480),
-                          thumbnailFormat: ThumbnailFormat.jpeg,
-                          fit: BoxFit.cover,
-                          errorBuilder: (context, error, stack) =>
-                              const ColoredBox(color: Colors.black),
-                        ),
-                        CustomPaint(
-                          painter: _MiniOverviewPainter(
-                            windows: widget.windows,
-                            imgAspect: widget.imgAspect,
-                            screenAspect: widget.screenAspect,
-                            selected: _sel,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.only(top: 4),
-          child: Text(
-            '正在調整：視窗 ${_sel + 1} / ${widget.windows.length}',
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600),
-          ),
-        ),
       ],
     );
-  }
-
-  int _nearestWindow(double nx, double ny) {
-    var best = 0;
-    var bestDist = double.infinity;
-    for (var i = 0; i < widget.windows.length; i++) {
-      final w = widget.windows[i];
-      final dx = (w.focusX - nx);
-      final dy = (w.focusY - ny) * 0.5;
-      final d = dx * dx + dy * dy;
-      if (d < bestDist) {
-        bestDist = d;
-        best = i;
-      }
-    }
-    return best;
   }
 }
 
@@ -478,57 +404,6 @@ class _ViewportGuides extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _ViewportGuides oldDelegate) => false;
-}
-
-class _MiniOverviewPainter extends CustomPainter {
-  _MiniOverviewPainter({
-    required this.windows,
-    required this.imgAspect,
-    required this.screenAspect,
-    required this.selected,
-  });
-
-  final List<CropWindow> windows;
-  final double imgAspect;
-  final double screenAspect;
-  final int selected;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    for (var i = 0; i < windows.length; i++) {
-      final color = WallpaperSequencePage.colorFor(i);
-      final active = i == selected;
-      final r = windowRect(windows[i], imgAspect, screenAspect);
-      final rect = Rect.fromLTRB(
-        r.left * size.width,
-        r.top * size.height,
-        r.right * size.width,
-        r.bottom * size.height,
-      );
-      canvas.drawRect(
-        rect,
-        Paint()
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = active ? 3 : 1.6
-          ..color = active ? color : color.withValues(alpha: 0.7),
-      );
-      if (active) {
-        canvas.drawRect(
-          rect,
-          Paint()
-            ..style = PaintingStyle.fill
-            ..color = color.withValues(alpha: 0.18),
-        );
-      }
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _MiniOverviewPainter old) =>
-      old.windows != windows ||
-      old.selected != selected ||
-      old.imgAspect != imgAspect ||
-      old.screenAspect != screenAspect;
 }
 
 class _WindowTile extends StatelessWidget {
