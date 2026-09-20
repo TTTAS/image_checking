@@ -65,6 +65,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
   int _flags = kFlagSystem;
 
   double _bw = 0, _bh = 0, _cw = 0, _ch = 0;
+  double _minScale = 0;
 
   bool get _animated {
     final m = (widget.asset.mimeType ?? '').toLowerCase();
@@ -87,6 +88,24 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
     return Matrix4.identity()
       ..translate(tx, ty)
       ..scale(zoom);
+  }
+
+  /// After a pan/zoom gesture ends, nudge near-aligned values to the exact
+  /// target so a crop that is "off by a hair" lands cleanly: focus snaps to the
+  /// exact centre, and zoom snaps to exactly "fit whole image" or "fill screen".
+  void _snapOnEnd() {
+    if (_cw <= 0 || _ch <= 0) return;
+    var (z, fx, fy) = _currentCrop();
+    const posTol = 0.025;
+    const zoomTol = 0.06;
+    if ((fx - 0.5).abs() < posTol) fx = 0.5;
+    if ((fy - 0.5).abs() < posTol) fy = 0.5;
+    if (_minScale > 0 && (z - _minScale).abs() < zoomTol) {
+      z = _minScale;
+    } else if ((z - 1.0).abs() < zoomTol) {
+      z = 1.0;
+    }
+    _transform.value = _matrixFor(z, fx, fy);
   }
 
   (double, double, double) _currentCrop() {
@@ -205,6 +224,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                         _ch = ch;
                         final fitScale = (bw / cw < bh / ch ? bw / cw : bh / ch);
                         final minScale = fitScale.clamp(0.05, 1.0);
+                        _minScale = minScale;
                         const maxScale = 6.0;
 
                         if (!_applied) {
@@ -227,6 +247,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                           boundaryMargin: const EdgeInsets.all(double.infinity),
                           minScale: minScale,
                           maxScale: maxScale,
+                          onInteractionEnd: (_) => _snapOnEnd(),
                           child: SizedBox(
                             width: cw,
                             height: ch,
@@ -246,9 +267,13 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                     ),
                   ),
                     ),
-                    // Frame outline: sits OUTSIDE the RepaintBoundary above, so
-                    // it marks the wallpaper boundary on screen but is never
-                    // captured into the saved wallpaper image.
+                    // Alignment guides (rule-of-thirds grid + centre crosshair)
+                    // and the frame outline both sit OUTSIDE the RepaintBoundary
+                    // above, so they help you line the crop up on screen but are
+                    // never captured into the saved wallpaper image.
+                    const IgnorePointer(
+                      child: CustomPaint(painter: _GuidesPainter()),
+                    ),
                     IgnorePointer(
                       child: DecoratedBox(
                         decoration: BoxDecoration(
@@ -264,8 +289,8 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Text(
-              '預設把整張置中塞進畫面（多出來的邊留黑）。黃色外框就是螢幕（桌布）的邊界；'
-              '雙指放大可以切滿螢幕，框內就是這個視窗顯示的範圍。',
+              '黃色外框是螢幕（桌布）邊界；九宮格與中央十字線幫你對齊。'
+              '雙指縮放平移，放開手時會自動貼齊正中／完整／滿版，框內就是這個視窗顯示的範圍。',
               style: TextStyle(color: Colors.white70, fontSize: 12),
               textAlign: TextAlign.center,
             ),
@@ -372,4 +397,42 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
       ),
     );
   }
+}
+
+/// Rule-of-thirds grid plus a brighter centre crosshair, drawn over the crop
+/// frame to help line the picture up. Painted outside the capture boundary, so
+/// none of these lines appear in the saved wallpaper.
+class _GuidesPainter extends CustomPainter {
+  const _GuidesPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final thirds = Paint()
+      ..color = Colors.white.withValues(alpha: 0.35)
+      ..strokeWidth = 1;
+    // Vertical + horizontal thirds.
+    for (var i = 1; i <= 2; i++) {
+      final x = size.width * i / 3;
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), thirds);
+      final y = size.height * i / 3;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), thirds);
+    }
+    // Centre crosshair, brighter so "dead centre" is easy to hit.
+    final center = Paint()
+      ..color = const Color(0xFFFFCA28).withValues(alpha: 0.7)
+      ..strokeWidth = 1.4;
+    canvas.drawLine(
+      Offset(size.width / 2, 0),
+      Offset(size.width / 2, size.height),
+      center,
+    );
+    canvas.drawLine(
+      Offset(0, size.height / 2),
+      Offset(size.width, size.height / 2),
+      center,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _GuidesPainter oldDelegate) => false;
 }
