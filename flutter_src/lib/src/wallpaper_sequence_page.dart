@@ -7,15 +7,14 @@ import 'wallpaper_playlist.dart';
 
 /// Editor for one playlist item's "window sequence": an ordered list of
 /// framings ([CropWindow]) of a single original image. The whole sequence is
-/// still one entry in the playlist; on the home screen the live wallpaper is
-/// driven purely by left/right swipe, stepping through the windows in order
-/// (it does NOT auto-advance on a timer).
+/// still one entry in the playlist; on the home screen the live wallpaper steps
+/// through the windows by left/right swipe (it does NOT auto-advance windows).
 ///
-/// The top panel shows the whole image once with every window's crop outline
-/// drawn on it (numbered in order); drag it left/right to scrub, which reveals
-/// alignment guides and a percentage ruler. Below it the windows can be added,
-/// auto-sliced, edited (via the crop picker), reordered and deleted. At least
-/// one window is always kept.
+/// The top panel shows the whole image with every window's crop outline drawn
+/// on it (numbered, colour-matched to the list). You can **drag a window's box
+/// directly on that image** to fine-tune where it crops; releasing saves it.
+/// Below, windows can be added, auto-sliced, edited, reordered and deleted.
+/// At least one window is always kept.
 class WallpaperSequencePage extends StatelessWidget {
   const WallpaperSequencePage({
     super.key,
@@ -73,7 +72,6 @@ class WallpaperSequencePage extends StatelessWidget {
   /// exactly "fill height, crop width" in the crop transform space.
   static List<CropWindow> autoSliceWindows(
       double imgAspect, double screenAspect) {
-    // Fraction of the image width one full-height strip shows.
     final visible = screenAspect / imgAspect;
     if (visible <= 0 || visible >= 0.999) {
       return [CropWindow(zoom: 1.0)];
@@ -81,7 +79,6 @@ class WallpaperSequencePage extends StatelessWidget {
     final n = (1 / visible).ceil().clamp(2, 12);
     final windows = <CropWindow>[];
     for (var i = 0; i < n; i++) {
-      // Spread focus so strip 0 is flush-left and strip n-1 flush-right.
       final fx = visible / 2 + i * (1 - visible) / (n - 1);
       windows.add(CropWindow(zoom: 1.0, focusX: fx, focusY: 0.5));
     }
@@ -159,13 +156,15 @@ class WallpaperSequencePage extends StatelessWidget {
                 windows: windows,
                 imgAspect: imgAspect,
                 screenAspect: screenAspect,
+                onWindowMoved: (index, window) => WallpaperPlaylist.updateWindow(
+                    target, asset.id, index, window),
               ),
               const Padding(
                 padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
                 child: Text(
                   '每個「視窗」是這張圖的一塊顯示範圍，主畫面左滑／右滑依序切換（不會自動換）。'
-                  '上圖用對應顏色標出各視窗；用手指左右滑動上圖可檢視，會顯示輔助線與刻度。'
-                  '寬圖想整張看完，按右上角「自動切片」。',
+                  '在上圖用手指拖曳任一顏色框，即可微調該視窗裁切的位置（放開即存，拖曳時顯示對齊線）；'
+                  '點下方清單可放大編輯。寬圖想整張看完，按右上角「自動切片」。',
                   style: TextStyle(fontSize: 12),
                 ),
               ),
@@ -204,11 +203,11 @@ class WallpaperSequencePage extends StatelessWidget {
   }
 }
 
-/// Normalized (0..1) rectangle of the original image that a window shows, given
-/// the wallpaper screen aspect. Mirrors the crop page's transform math so the
-/// outline matches what will actually be displayed.
-Rect windowRect(CropWindow w, double imgAspect, double screenAspect) {
-  const bw = 1.0; // nominal box; only ratios matter.
+/// Visible half-extent (normalized 0..1) of a window in each axis, and the
+/// rectangle it shows. Mirrors the crop page's transform math.
+({double halfW, double halfH}) _visibleHalf(
+    CropWindow w, double imgAspect, double screenAspect) {
+  const bw = 1.0;
   final bh = bw / screenAspect;
   double cw, ch;
   if (imgAspect > screenAspect) {
@@ -220,14 +219,17 @@ Rect windowRect(CropWindow w, double imgAspect, double screenAspect) {
   }
   final fitScale = (bw / cw < bh / ch) ? bw / cw : bh / ch;
   final zoom = w.zoom <= 0 ? fitScale : w.zoom;
-  final halfW = bw / (2 * zoom * cw);
-  final halfH = bh / (2 * zoom * ch);
+  return (halfW: bw / (2 * zoom * cw), halfH: bh / (2 * zoom * ch));
+}
+
+Rect windowRect(CropWindow w, double imgAspect, double screenAspect) {
+  final h = _visibleHalf(w, imgAspect, screenAspect);
   double clamp01(double v) => v < 0 ? 0 : (v > 1 ? 1 : v);
   return Rect.fromLTRB(
-    clamp01(w.focusX - halfW),
-    clamp01(w.focusY - halfH),
-    clamp01(w.focusX + halfW),
-    clamp01(w.focusY + halfH),
+    clamp01(w.focusX - h.halfW),
+    clamp01(w.focusY - h.halfH),
+    clamp01(w.focusX + h.halfW),
+    clamp01(w.focusY + h.halfH),
   );
 }
 
@@ -237,34 +239,91 @@ class _Overview extends StatefulWidget {
     required this.windows,
     required this.imgAspect,
     required this.screenAspect,
+    required this.onWindowMoved,
   });
 
   final AssetEntity asset;
   final List<CropWindow> windows;
   final double imgAspect;
   final double screenAspect;
+  final void Function(int index, CropWindow window) onWindowMoved;
 
   @override
   State<_Overview> createState() => _OverviewState();
 }
 
 class _OverviewState extends State<_Overview> {
-  bool _dragging = false;
-  double _dragX = 0.5; // normalized 0..1
+  int _grabbed = -1;
+  double _liveX = 0.5;
+  double _liveY = 0.5;
 
-  void _setDrag(double x) {
+  /// Constrain focus so the window stays fully on the image (no black edges).
+  double _clampFocus(double v, double half) {
+    if (half >= 0.5) return 0.5;
+    return v.clamp(half, 1 - half);
+  }
+
+  int _nearestWindow(double nx, double ny) {
+    var best = 0;
+    var bestDist = double.infinity;
+    for (var i = 0; i < widget.windows.length; i++) {
+      final w = widget.windows[i];
+      // Weight X more than Y (strips usually differ horizontally).
+      final dx = (w.focusX - nx) * 1.0;
+      final dy = (w.focusY - ny) * 0.5;
+      final d = dx * dx + dy * dy;
+      if (d < bestDist) {
+        bestDist = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  void _start(double nx, double ny) {
+    if (widget.windows.isEmpty) return;
+    final i = _nearestWindow(nx, ny);
+    final w = widget.windows[i];
+    final h = _visibleHalf(w, widget.imgAspect, widget.screenAspect);
     setState(() {
-      _dragging = true;
-      _dragX = x.clamp(0.0, 1.0);
+      _grabbed = i;
+      _liveX = _clampFocus(nx, h.halfW);
+      _liveY = _clampFocus(ny, h.halfH);
     });
   }
 
-  void _endDrag() {
-    setState(() => _dragging = false);
+  void _move(double nx, double ny) {
+    if (_grabbed < 0) return;
+    final w = widget.windows[_grabbed];
+    final h = _visibleHalf(w, widget.imgAspect, widget.screenAspect);
+    setState(() {
+      _liveX = _clampFocus(nx, h.halfW);
+      _liveY = _clampFocus(ny, h.halfH);
+    });
+  }
+
+  void _end() {
+    if (_grabbed >= 0 && _grabbed < widget.windows.length) {
+      final w = widget.windows[_grabbed];
+      widget.onWindowMoved(
+        _grabbed,
+        CropWindow(zoom: w.zoom, focusX: _liveX, focusY: _liveY),
+      );
+    }
+    setState(() => _grabbed = -1);
   }
 
   @override
   Widget build(BuildContext context) {
+    // While dragging, show the grabbed window at its live position.
+    final effective = List<CropWindow>.from(widget.windows);
+    if (_grabbed >= 0 && _grabbed < effective.length) {
+      effective[_grabbed] = CropWindow(
+        zoom: effective[_grabbed].zoom,
+        focusX: _liveX,
+        focusY: _liveY,
+      );
+    }
     return Container(
       color: Colors.black,
       constraints: const BoxConstraints(maxHeight: 260),
@@ -275,14 +334,17 @@ class _OverviewState extends State<_Overview> {
         child: LayoutBuilder(
           builder: (context, constraints) {
             final w = constraints.maxWidth;
+            final h = constraints.maxHeight;
+            double nx(double dx) => (w > 0 ? dx / w : 0.5).clamp(0.0, 1.0);
+            double ny(double dy) => (h > 0 ? dy / h : 0.5).clamp(0.0, 1.0);
             return GestureDetector(
               behavior: HitTestBehavior.opaque,
-              onHorizontalDragStart: (d) =>
-                  _setDrag(w > 0 ? d.localPosition.dx / w : 0.5),
-              onHorizontalDragUpdate: (d) =>
-                  _setDrag(w > 0 ? d.localPosition.dx / w : 0.5),
-              onHorizontalDragEnd: (_) => _endDrag(),
-              onHorizontalDragCancel: _endDrag,
+              onPanStart: (d) =>
+                  _start(nx(d.localPosition.dx), ny(d.localPosition.dy)),
+              onPanUpdate: (d) =>
+                  _move(nx(d.localPosition.dx), ny(d.localPosition.dy)),
+              onPanEnd: (_) => _end(),
+              onPanCancel: _end,
               child: Stack(
                 fit: StackFit.expand,
                 children: [
@@ -300,11 +362,10 @@ class _OverviewState extends State<_Overview> {
                   ),
                   CustomPaint(
                     painter: _WindowsPainter(
-                      windows: widget.windows,
+                      windows: effective,
                       imgAspect: widget.imgAspect,
                       screenAspect: widget.screenAspect,
-                      dragging: _dragging,
-                      dragX: _dragX,
+                      grabbed: _grabbed,
                     ),
                   ),
                 ],
@@ -322,21 +383,20 @@ class _WindowsPainter extends CustomPainter {
     required this.windows,
     required this.imgAspect,
     required this.screenAspect,
-    required this.dragging,
-    required this.dragX,
+    required this.grabbed,
   });
 
   final List<CropWindow> windows;
   final double imgAspect;
   final double screenAspect;
-  final bool dragging;
-  final double dragX;
+  final int grabbed;
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Crop rectangles, one per window.
     for (var i = 0; i < windows.length; i++) {
       final color = WallpaperSequencePage.colorFor(i);
+      final active = i == grabbed;
+      final dim = grabbed >= 0 && !active;
       final r = windowRect(windows[i], imgAspect, screenAspect);
       final rect = Rect.fromLTRB(
         r.left * size.width,
@@ -348,22 +408,30 @@ class _WindowsPainter extends CustomPainter {
         rect,
         Paint()
           ..style = PaintingStyle.stroke
-          ..strokeWidth = 2.5
-          ..color = color,
+          ..strokeWidth = active ? 3.5 : 2.5
+          ..color = dim ? color.withValues(alpha: 0.35) : color,
       );
       canvas.drawRect(
         rect,
         Paint()
           ..style = PaintingStyle.fill
-          ..color = color.withValues(alpha: 0.12),
+          ..color = color.withValues(alpha: active ? 0.22 : (dim ? 0.05 : 0.12)),
       );
       _drawBadge(canvas, '${i + 1}', rect.left + 2, rect.top + 2, color);
     }
 
-    if (dragging) {
+    if (grabbed >= 0 && grabbed < windows.length) {
       _drawGuides(canvas, size);
-      _drawRuler(canvas, size);
-      _drawPlayhead(canvas, size);
+      final w = windows[grabbed];
+      _drawText(
+        canvas,
+        '左 ${(w.focusX * 100).round()}%',
+        6,
+        size.height - 22,
+        color: Colors.white,
+        fontSize: 12,
+        background: Colors.black.withValues(alpha: 0.5),
+      );
     }
   }
 
@@ -380,49 +448,10 @@ class _WindowsPainter extends CustomPainter {
     final center = Paint()
       ..color = const Color(0xFFFFCA28).withValues(alpha: 0.6)
       ..strokeWidth = 1.2;
+    canvas.drawLine(
+        Offset(size.width / 2, 0), Offset(size.width / 2, size.height), center);
     canvas.drawLine(Offset(0, size.height / 2),
         Offset(size.width, size.height / 2), center);
-  }
-
-  /// Percentage scale along the top edge.
-  void _drawRuler(Canvas canvas, Size size) {
-    canvas.drawRect(
-      Rect.fromLTWH(0, 0, size.width, 16),
-      Paint()..color = Colors.black.withValues(alpha: 0.45),
-    );
-    final tick = Paint()
-      ..color = Colors.white.withValues(alpha: 0.8)
-      ..strokeWidth = 1;
-    for (var p = 0; p <= 100; p += 10) {
-      final x = size.width * p / 100;
-      final major = p % 25 == 0;
-      canvas.drawLine(Offset(x, 0), Offset(x, major ? 10 : 6), tick);
-      if (major) {
-        _drawText(canvas, '$p', x + 2, 3,
-            color: Colors.white, fontSize: 9);
-      }
-    }
-  }
-
-  void _drawPlayhead(Canvas canvas, Size size) {
-    final x = dragX * size.width;
-    canvas.drawLine(
-      Offset(x, 0),
-      Offset(x, size.height),
-      Paint()
-        ..color = Colors.white
-        ..strokeWidth = 1.6,
-    );
-    final pct = (dragX * 100).round();
-    _drawText(
-      canvas,
-      '$pct%',
-      (x + 4).clamp(0.0, size.width - 34),
-      size.height - 20,
-      color: Colors.white,
-      fontSize: 12,
-      background: Colors.black.withValues(alpha: 0.5),
-    );
   }
 
   void _drawBadge(
@@ -471,8 +500,7 @@ class _WindowsPainter extends CustomPainter {
       old.windows != windows ||
       old.imgAspect != imgAspect ||
       old.screenAspect != screenAspect ||
-      old.dragging != dragging ||
-      old.dragX != dragX;
+      old.grabbed != grabbed;
 }
 
 class _WindowTile extends StatelessWidget {
