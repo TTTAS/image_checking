@@ -52,6 +52,10 @@ class WallpaperCropPage extends StatefulWidget {
 }
 
 class _WallpaperCropPageState extends State<WallpaperCropPage> {
+  /// Outline drawn around the wallpaper frame so its boundary is visible even
+  /// when the default framing leaves black letterbox bars on a black page.
+  static const Color _frameColor = Color(0xFFFFCA28); // amber
+
   final GlobalKey _cropKey = GlobalKey();
   final TransformationController _transform = TransformationController();
 
@@ -172,7 +176,10 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
             child: Center(
               child: AspectRatio(
                 aspectRatio: cropAspect,
-                child: RepaintBoundary(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    RepaintBoundary(
                   key: _cropKey,
                   child: ClipRect(
                     child: LayoutBuilder(
@@ -238,6 +245,18 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                       },
                     ),
                   ),
+                    ),
+                    // Frame outline: sits OUTSIDE the RepaintBoundary above, so
+                    // it marks the wallpaper boundary on screen but is never
+                    // captured into the saved wallpaper image.
+                    IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: _frameColor, width: 2.5),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -245,7 +264,8 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Text(
-              '預設把整張置中塞進畫面（多出來的邊留黑）。雙指放大可以切滿螢幕；框內就是這個視窗顯示的範圍。',
+              '預設把整張置中塞進畫面（多出來的邊留黑）。黃色外框就是螢幕（桌布）的邊界；'
+              '雙指放大可以切滿螢幕，框內就是這個視窗顯示的範圍。',
               style: TextStyle(color: Colors.white70, fontSize: 12),
               textAlign: TextAlign.center,
             ),
