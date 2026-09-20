@@ -257,7 +257,7 @@ class _WallpaperPageState extends State<WallpaperPage>
       if (!mounted) return;
       messenger.showSnackBar(SnackBar(
         content: Text(
-            '請在系統預覽按「設定」，並選擇主畫面或主畫面與鎖定畫面；左右滑動切換視窗，多張桌布每 ${_intervalText(mins)}自動輪換。'),
+            '請在系統預覽按「設定」，並選擇主畫面或主畫面與鎖定畫面；左右滑動會平移圖片，多張桌布每 ${_intervalText(mins)}自動輪換。'),
       ));
     } on PlatformException catch (e) {
       messenger.showSnackBar(

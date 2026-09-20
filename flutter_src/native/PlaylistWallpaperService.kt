@@ -27,18 +27,18 @@ import java.io.File
 /// separate lists. Earlier Android versions do not expose that distinction to a
 /// wallpaper service; they use HOME (or LOCK when HOME is empty).
 class PlaylistWallpaperService : WallpaperService() {
+    // One framing keyframe of an item's image.
+    private data class Win(val zoom: Float, val fx: Float, val fy: Float)
+
     private data class Item(
         val path: String,
-        val zoom: Float,
-        val fx: Float,
-        val fy: Float,
         val animated: Boolean,
         val video: Boolean,
         val fallbackPath: String,
-        // Index of the source playlist entry this window belongs to. Windows of
-        // the same source item share a group so shuffle keeps them together and
-        // in order.
-        val group: Int,
+        // Ordered framing keyframes. The horizontal scroll fraction is
+        // interpolated across these so the picture pans smoothly (not a
+        // slideshow). Always at least one.
+        val windows: List<Win>,
     )
 
     override fun onCreateEngine(): Engine = PlaylistEngine()
@@ -58,11 +58,10 @@ class PlaylistWallpaperService : WallpaperService() {
         // Minutes between automatic rotations to the NEXT item (different image).
         // Windows within one item are navigated by swipe only, never on a timer.
         private var intervalMinutes = 5
-        // Number of distinct source items in the current list; only rotate when
-        // there is more than one (a single sliced image stays swipe-only).
-        private var groupCount = 1
-        // Last home-screen page index seen from onOffsetsChanged; -1 = unsynced.
-        private var lastPage = -1
+        // Current item being shown, plus the continuous horizontal scroll
+        // fraction (0..1) the launcher reports; used to pan the picture smoothly.
+        private var current: Item? = null
+        private var xFrac = 0f
 
         private var visible = false
         private var surfaceW = 0
@@ -77,8 +76,8 @@ class PlaylistWallpaperService : WallpaperService() {
         private var playbackGeneration = 0
         private var firstVideoFrame = false
         // Timed rotation to the next item (different image).
-        private val nextItem = Runnable { advanceItem() }
-        // Throttled skip past a frame whose media failed to load.
+        private val nextItem = Runnable { advance() }
+        // Throttled skip past an item whose media failed to load.
         private val skipBroken = Runnable { advance() }
         private val videoTimeout = Runnable {
             if (!firstVideoFrame && player != null) {
@@ -152,15 +151,14 @@ class PlaylistWallpaperService : WallpaperService() {
             }
         }
 
-        /// Home-screen horizontal swipe. Each time the launcher moves to a
-        /// different home page we step the window by one (wrapping), rather than
-        /// mapping the raw scroll fraction onto the window index. That keeps the
-        /// window count independent of the number of home pages — e.g. 3 windows
-        /// on a 2-page launcher still cycle one-per-swipe — and avoids flashing
-        /// intermediate windows mid-swipe.
+        /// Home-screen horizontal swipe. The launcher reports the scroll position
+        /// as [xOffset] in 0..1; we track it continuously and pan the current
+        /// picture across its framing keyframes so the image slides smoothly with
+        /// the finger (not a slideshow). Switching to a different picture is the
+        /// timer's job, not the swipe's.
         ///
-        /// Launchers that lock wallpaper scrolling never call this (the page
-        /// never changes), so the picture simply stays put until swiped.
+        /// Launchers that lock wallpaper scrolling keep xOffset constant, so the
+        /// picture simply stays put.
         override fun onOffsetsChanged(
             xOffset: Float,
             yOffset: Float,
@@ -169,24 +167,22 @@ class PlaylistWallpaperService : WallpaperService() {
             xPixelOffset: Int,
             yPixelOffset: Int,
         ) {
-            val n = order.size
-            if (!visible || n <= 1) return
-            // Discrete home page = scroll fraction / per-page step, rounded.
-            val step = if (xOffsetStep.isNaN() || xOffsetStep <= 0f) 1f else xOffsetStep
-            val x = if (xOffset.isNaN()) 0f else xOffset.coerceIn(0f, 1f)
-            val page = Math.round(x / step)
-            if (lastPage < 0) {
-                lastPage = page
-                return
+            if (!visible) return
+            val nx = if (xOffset.isNaN()) 0f else xOffset.coerceIn(0f, 1f)
+            if ((nx - xFrac).isNaN() || (nx - xFrac) == 0f) return
+            xFrac = nx
+            val item = current ?: return
+            if (imgW > 0 && imgH > 0) {
+                computeTransform(item, imgW, imgH)
+                // Stills/GIF: redraw now. Video: the next decoded frame uses the
+                // updated transform.
+                if (player == null) drawFrame()
             }
-            if (page == lastPage) return
-            val delta = page - lastPage
-            lastPage = page
-            var next = (pos + delta) % n
-            if (next < 0) next += n
-            pos = next
+            // Keep interacting from being cut off by the rotation timer.
             handler.removeCallbacks(nextItem)
-            playCurrent(0)
+            if (order.size > 1) {
+                handler.postDelayed(nextItem, intervalMinutes * 60_000L)
+            }
         }
 
         override fun onSurfaceDestroyed(holder: SurfaceHolder) {
@@ -215,42 +211,40 @@ class PlaylistWallpaperService : WallpaperService() {
                 val animated = o.optBoolean("animated", false)
                 val video = o.optBoolean("video", false)
                 val fallbackPath = o.optString("fallbackPath", "")
-                // Expand the item's ordered crop windows into one Item each,
-                // sharing the same media file but framed differently. All belong
-                // to group [i] so they stay contiguous and in order after a
-                // shuffle. Fall back to the top-level transform (single window)
-                // for manifests written by older builds.
+                // Read the item's ordered framing keyframes; fall back to the
+                // top-level transform (single window) for older manifests.
+                val wins = mutableListOf<Win>()
                 val windows = o.optJSONArray("windows")
                 if (windows != null && windows.length() > 0) {
                     for (w in 0 until windows.length()) {
                         val win = windows.optJSONObject(w) ?: continue
-                        out.add(
-                            Item(
-                                path = path,
+                        wins.add(
+                            Win(
                                 zoom = win.optDouble("zoom", 0.0).toFloat(),
                                 fx = win.optDouble("focusX", 0.5).toFloat(),
                                 fy = win.optDouble("focusY", 0.5).toFloat(),
-                                animated = animated,
-                                video = video,
-                                fallbackPath = fallbackPath,
-                                group = i,
                             )
                         )
                     }
-                } else {
-                    out.add(
-                        Item(
-                            path = path,
+                }
+                if (wins.isEmpty()) {
+                    wins.add(
+                        Win(
                             zoom = o.optDouble("zoom", 0.0).toFloat(),
                             fx = o.optDouble("focusX", 0.5).toFloat(),
                             fy = o.optDouble("focusY", 0.5).toFloat(),
-                            animated = animated,
-                            video = video,
-                            fallbackPath = fallbackPath,
-                            group = i,
                         )
                     )
                 }
+                out.add(
+                    Item(
+                        path = path,
+                        animated = animated,
+                        video = video,
+                        fallbackPath = fallbackPath,
+                        windows = wins,
+                    )
+                )
             }
         }
 
@@ -306,44 +300,9 @@ class PlaylistWallpaperService : WallpaperService() {
                 homeItems.isNotEmpty() -> homeItems
                 else -> lockItems
             }
-            order = buildOrder(items, shuffle)
-            groupCount = items.map { it.group }.toSet().size
+            order = (items.indices).toMutableList()
+            if (shuffle) order.shuffle()
             if (pos !in order.indices) pos = 0
-            // Re-sync page tracking; the next offset event just records the page.
-            lastPage = -1
-        }
-
-        /// Timed rotation to the next item (a different image), keeping windows
-        /// swipe-only. No-op when there is only one item.
-        private fun advanceItem() {
-            if (order.size <= 1 || groupCount <= 1) return
-            val curGroup = items[order[pos]].group
-            for (i in 1..order.size) {
-                val idx = (pos + i) % order.size
-                if (items[order[idx]].group != curGroup) {
-                    pos = idx
-                    break
-                }
-            }
-            playCurrent(0)
-        }
-
-        /// Builds the playback order. Windows are grouped by their source item;
-        /// shuffle only reorders the groups, never the windows inside a group,
-        /// so a wide photo's left→right sequence always plays in order.
-        private fun buildOrder(source: List<Item>, shuffleGroups: Boolean):
-            MutableList<Int> {
-            val groups = LinkedHashMap<Int, MutableList<Int>>()
-            for (i in source.indices) {
-                groups.getOrPut(source[i].group) { mutableListOf() }.add(i)
-            }
-            val groupKeys = groups.keys.toMutableList()
-            if (shuffleGroups) groupKeys.shuffle()
-            val result = mutableListOf<Int>()
-            for (key in groupKeys) {
-                groups[key]?.let { result.addAll(it) }
-            }
-            return result
         }
 
         private fun recordStatus(message: String) {
@@ -395,8 +354,9 @@ class PlaylistWallpaperService : WallpaperService() {
             frameBitmap = null
         }
 
+        /// Move to the next item (different picture). No-op with a single item.
         private fun advance() {
-            if (order.isEmpty()) return
+            if (order.size <= 1) return
             pos = (pos + 1) % order.size
             playCurrent(0)
         }
@@ -410,6 +370,7 @@ class PlaylistWallpaperService : WallpaperService() {
                 return
             }
             val item = items.getOrNull(order[pos]) ?: return
+            current = item
             val file = File(item.path)
             if (!file.exists()) {
                 reportError("找不到桌布檔案：${item.path}")
@@ -434,13 +395,13 @@ class PlaylistWallpaperService : WallpaperService() {
                 return
             }
 
-            // Windows within one item are swipe-only; [tick] just keeps animated
-            // frames (GIF/WebP) redrawing. Different items rotate on a timer.
+            // Swipe pans within the current picture; [tick] keeps animated
+            // frames (GIF/WebP) redrawing. Different pictures rotate on a timer.
             if (player == null) {
                 handler.post(tick)
             }
             handler.removeCallbacks(nextItem)
-            if (groupCount > 1) {
+            if (order.size > 1) {
                 handler.postDelayed(nextItem, intervalMinutes * 60_000L)
             }
         }
@@ -587,14 +548,44 @@ class PlaylistWallpaperService : WallpaperService() {
                 surfaceW.toFloat() / width,
                 surfaceH.toFloat() / height,
             )
-            // Default is contain/center: the whole item remains visible.
-            drawScale = if (item.zoom <= 0f) {
-                contain
+            fun scaleOf(w: Win) =
+                if (w.zoom <= 0f) contain else cover * w.zoom.coerceAtLeast(0.1f)
+
+            val wins = item.windows
+            val frac = xFrac.coerceIn(0f, 1f)
+            var scale: Float
+            var fx: Float
+            var fy: Float
+            if (wins.size >= 2) {
+                // Treat windows as keyframes; the scroll fraction interpolates
+                // continuously between them so the picture pans smoothly.
+                val p = frac * (wins.size - 1)
+                val i0 = p.toInt().coerceIn(0, wins.size - 1)
+                val i1 = (i0 + 1).coerceAtMost(wins.size - 1)
+                val f = p - i0
+                val a = wins[i0]
+                val b = wins[i1]
+                scale = scaleOf(a) + (scaleOf(b) - scaleOf(a)) * f
+                fx = a.fx + (b.fx - a.fx) * f
+                fy = a.fy + (b.fy - a.fy) * f
             } else {
-                cover * item.zoom.coerceAtLeast(0.1f)
+                val w0 = wins.firstOrNull() ?: Win(0f, 0.5f, 0.5f)
+                scale = scaleOf(w0)
+                if (w0.zoom <= 0f) {
+                    // Whole image visible (letterboxed): nothing to pan.
+                    fx = 0.5f
+                    fy = 0.5f
+                } else {
+                    // Single zoomed window: pan the visible viewport across the
+                    // whole width as the user scrolls.
+                    val halfW = (surfaceW / 2f) / (scale * width)
+                    fx = if (halfW >= 0.5f) 0.5f else halfW + (1 - 2 * halfW) * frac
+                    fy = w0.fy
+                }
             }
-            drawLeft = surfaceW / 2f - drawScale * item.fx * width
-            drawTop = surfaceH / 2f - drawScale * item.fy * height
+            drawScale = scale
+            drawLeft = surfaceW / 2f - drawScale * fx * width
+            drawTop = surfaceH / 2f - drawScale * fy * height
         }
 
         private fun drawFrame() {
