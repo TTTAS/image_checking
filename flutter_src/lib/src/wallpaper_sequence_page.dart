@@ -60,9 +60,20 @@ class WallpaperSequencePage extends StatefulWidget {
 class _WallpaperSequencePageState extends State<WallpaperSequencePage> {
   /// Height of the top preview pane; null until first laid out.
   double? _previewHeight;
+  double _minH = 90;
+  double _maxH = 400;
 
   AssetEntity get _asset => widget.asset;
   WallpaperTarget get _target => widget.target;
+
+  /// Resize the preview pane. Accumulates from the CURRENT height (not a value
+  /// captured during build), so multiple drag events within one frame don't
+  /// overwrite each other — that stale-capture bug made the divider feel numb.
+  void _resize(double dy) {
+    setState(() {
+      _previewHeight = ((_previewHeight ?? _minH) + dy).clamp(_minH, _maxH);
+    });
+  }
 
   Future<void> _addWindow() async {
     final window = await Navigator.of(context).push<CropWindow>(
@@ -150,10 +161,10 @@ class _WallpaperSequencePageState extends State<WallpaperSequencePage> {
       body: LayoutBuilder(
         builder: (context, constraints) {
           final total = constraints.maxHeight;
-          final minH = 90.0;
-          final maxH = (total * 0.75).clamp(minH, total);
-          _previewHeight ??= (total * 0.42).clamp(minH, maxH);
-          final h = _previewHeight!.clamp(minH, maxH);
+          _minH = 90.0;
+          _maxH = (total * 0.75).clamp(_minH, total);
+          _previewHeight ??= (total * 0.42).clamp(_minH, _maxH);
+          final h = _previewHeight!.clamp(_minH, _maxH);
           return ValueListenableBuilder<List<WallpaperItem>>(
             valueListenable: WallpaperPlaylist.listFor(_target),
             builder: (context, list, _) {
@@ -176,10 +187,7 @@ class _WallpaperSequencePageState extends State<WallpaperSequencePage> {
                               _target, _asset.id, index, window),
                     ),
                   ),
-                  _ResizeHandle(
-                    onDelta: (dy) => setState(
-                        () => _previewHeight = (h + dy).clamp(minH, maxH)),
-                  ),
+                  _ResizeHandle(onDelta: _resize),
                   Expanded(
                     child: ReorderableListView.builder(
                       padding: const EdgeInsets.only(top: 4, bottom: 88),
@@ -228,11 +236,12 @@ class _ResizeHandle extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
+      dragStartBehavior: DragStartBehavior.down,
       onVerticalDragUpdate: (d) => onDelta(d.delta.dy),
       child: MouseRegion(
         cursor: SystemMouseCursors.resizeRow,
         child: Container(
-          height: 22,
+          height: 26,
           width: double.infinity,
           color: scheme.surfaceContainerHighest,
           alignment: Alignment.center,
