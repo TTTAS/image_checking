@@ -576,32 +576,54 @@ class _ActionBar extends StatelessWidget {
 class _ControlBar extends StatelessWidget {
   const _ControlBar();
 
-  static const _options = [1, 3, 5, 10, 30, 60];
-
   static String intervalLabel(int m) {
     if (m >= 60 && m % 60 == 0) return '${m ~/ 60} 小時';
     return '$m 分鐘';
   }
 
   Future<void> _pick(BuildContext context, WallpaperSettings s) async {
+    final controller =
+        TextEditingController(text: s.intervalMinutes.toString());
     final chosen = await showDialog<int>(
       context: context,
-      builder: (ctx) => SimpleDialog(
-        title: const Text('多久自動換一張桌布'),
-        children: [
-          for (final m in _options)
-            ListTile(
-              title: Text(intervalLabel(m)),
-              trailing:
-                  s.intervalMinutes == m ? const Icon(Icons.check) : null,
-              onTap: () => Navigator.pop(ctx, m),
-            ),
-        ],
-      ),
+      builder: (ctx) {
+        void submit() =>
+            Navigator.pop(ctx, int.tryParse(controller.text.trim()));
+        return AlertDialog(
+          title: const Text('多久自動換一張桌布'),
+          content: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 96,
+                child: TextField(
+                  controller: controller,
+                  autofocus: true,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  textAlign: TextAlign.center,
+                  decoration: const InputDecoration(
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  onSubmitted: (_) => submit(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              const Text('分鐘'),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            FilledButton(onPressed: submit, child: const Text('確定')),
+          ],
+        );
+      },
     );
-    if (chosen != null) {
+    if (chosen != null && chosen > 0) {
       await WallpaperPlaylist.updateSettings(
-          s.copyWith(intervalMinutes: chosen));
+          s.copyWith(intervalMinutes: chosen.clamp(1, 10080)));
     }
   }
 
