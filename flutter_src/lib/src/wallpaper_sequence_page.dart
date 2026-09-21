@@ -236,7 +236,6 @@ class _ResizeHandle extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
-      dragStartBehavior: DragStartBehavior.down,
       onVerticalDragUpdate: (d) => onDelta(d.delta.dy),
       child: MouseRegion(
         cursor: SystemMouseCursors.resizeRow,
