@@ -244,20 +244,20 @@ class _WallpaperPageState extends State<WallpaperPage>
     }
     try {
       final secs = s.liveSeconds <= 0 ? 30 : s.liveSeconds;
-      final mins = s.intervalMinutes <= 0 ? 5 : s.intervalMinutes;
+      final interval = s.intervalSeconds <= 0 ? 300 : s.intervalSeconds;
       await NativeWallpaper.applyLive(
         homeItems: homeItems,
         lockItems: lockItems,
         liveSeconds: secs,
         loops: s.loopsBeforeNext,
         shuffle: s.shuffle,
-        intervalMinutes: mins,
+        intervalSeconds: interval,
       );
       await NativeWallpaper.openLiveWallpaperPreview();
       if (!mounted) return;
       messenger.showSnackBar(SnackBar(
         content: Text(
-            '請在系統預覽按「設定」，並選擇主畫面或主畫面與鎖定畫面；左右滑動會平移圖片，多張桌布每 ${_intervalText(mins)}自動輪換。'),
+            '請在系統預覽按「設定」，並選擇主畫面或主畫面與鎖定畫面；左右滑動會平移圖片，多張桌布每 ${_durationText(interval)}自動輪換。'),
       ));
     } on PlatformException catch (e) {
       messenger.showSnackBar(
@@ -291,7 +291,7 @@ class _WallpaperPageState extends State<WallpaperPage>
       );
       messenger.showSnackBar(SnackBar(
         content: Text(
-            '已套用：主畫面 ${homePaths.length} 張、鎖定 ${lockPaths.length} 張，約每 ${_intervalText(s.intervalMinutes)}換一張'),
+            '已套用：主畫面 ${homePaths.length} 張、鎖定 ${lockPaths.length} 張，鎖定約每 ${_durationText(s.intervalMinutes * 60)}換一張（鎖定最短 15 分鐘）'),
       ));
     } on PlatformException catch (e) {
       messenger.showSnackBar(
@@ -312,11 +312,7 @@ class _WallpaperPageState extends State<WallpaperPage>
     }
   }
 
-  static String _intervalText(int minutes) {
-    if (minutes >= 1440) return '${minutes ~/ 1440} 天';
-    if (minutes >= 60) return '${minutes ~/ 60} 小時';
-    return '$minutes 分鐘';
-  }
+  static String _durationText(int seconds) => formatDuration(seconds);
 
   Future<void> _confirmClear() async {
     final label = _tab.label;
@@ -571,59 +567,87 @@ class _ActionBar extends StatelessWidget {
   }
 }
 
+/// Formats a duration in seconds as e.g. "1 小時 5 分 30 秒" (zero parts omitted).
+String formatDuration(int seconds) {
+  if (seconds <= 0) return '0 秒';
+  final h = seconds ~/ 3600;
+  final m = (seconds % 3600) ~/ 60;
+  final s = seconds % 60;
+  final parts = <String>[];
+  if (h > 0) parts.add('$h 小時');
+  if (m > 0) parts.add('$m 分');
+  if (s > 0) parts.add('$s 秒');
+  return parts.join(' ');
+}
+
 /// Compact control row: a button to set how often different wallpapers rotate,
 /// plus a random-order toggle. Replaces the old settings sheet.
 class _ControlBar extends StatelessWidget {
   const _ControlBar();
 
-  static String intervalLabel(int m) {
-    if (m >= 60 && m % 60 == 0) return '${m ~/ 60} 小時';
-    return '$m 分鐘';
-  }
-
   Future<void> _pick(BuildContext context, WallpaperSettings s) async {
-    final controller =
-        TextEditingController(text: s.intervalMinutes.toString());
+    final total = s.intervalSeconds;
+    final hCtl = TextEditingController(text: (total ~/ 3600).toString());
+    final mCtl = TextEditingController(text: ((total % 3600) ~/ 60).toString());
+    final sCtl = TextEditingController(text: (total % 60).toString());
+
+    Widget field(TextEditingController c, String unit, {bool autofocus = false}) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 52,
+            child: TextField(
+              controller: c,
+              autofocus: autofocus,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              textAlign: TextAlign.center,
+              decoration: const InputDecoration(
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(unit),
+        ],
+      );
+    }
+
     final chosen = await showDialog<int>(
       context: context,
       builder: (ctx) {
-        void submit() =>
-            Navigator.pop(ctx, int.tryParse(controller.text.trim()));
+        int total() =>
+            (int.tryParse(hCtl.text.trim()) ?? 0) * 3600 +
+            (int.tryParse(mCtl.text.trim()) ?? 0) * 60 +
+            (int.tryParse(sCtl.text.trim()) ?? 0);
         return AlertDialog(
           title: const Text('多久自動換一張桌布'),
           content: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              SizedBox(
-                width: 96,
-                child: TextField(
-                  controller: controller,
-                  autofocus: true,
-                  keyboardType: TextInputType.number,
-                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-                  textAlign: TextAlign.center,
-                  decoration: const InputDecoration(
-                    isDense: true,
-                    border: OutlineInputBorder(),
-                  ),
-                  onSubmitted: (_) => submit(),
-                ),
-              ),
+              field(hCtl, '時', autofocus: true),
               const SizedBox(width: 8),
-              const Text('分鐘'),
+              field(mCtl, '分'),
+              const SizedBox(width: 8),
+              field(sCtl, '秒'),
             ],
           ),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
-            FilledButton(onPressed: submit, child: const Text('確定')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, total()),
+                child: const Text('確定')),
           ],
         );
       },
     );
     if (chosen != null && chosen > 0) {
+      // At least 1 second; cap at 7 days.
       await WallpaperPlaylist.updateSettings(
-          s.copyWith(intervalMinutes: chosen.clamp(1, 10080)));
+          s.copyWith(intervalSeconds: chosen.clamp(1, 7 * 24 * 3600)));
     }
   }
 
@@ -639,7 +663,7 @@ class _ControlBar extends StatelessWidget {
               Expanded(
                 child: OutlinedButton.icon(
                   icon: const Icon(Icons.timer_outlined),
-                  label: Text('自動換桌布：每 ${intervalLabel(s.intervalMinutes)}'),
+                  label: Text('自動換桌布：每 ${formatDuration(s.intervalSeconds)}'),
                   onPressed: () => _pick(context, s),
                 ),
               ),

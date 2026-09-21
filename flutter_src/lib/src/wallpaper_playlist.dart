@@ -128,28 +128,35 @@ class WallpaperItem {
 class WallpaperSettings {
   WallpaperSettings({
     this.live = false,
-    this.intervalMinutes = 5,
+    this.intervalSeconds = 300,
     this.shuffle = false,
     this.liveSeconds = 30,
     this.loopsBeforeNext = 1,
   });
 
   bool live;
-  int intervalMinutes;
+
+  /// How long each wallpaper shows before auto-switching to the next item,
+  /// in seconds (hours/minutes/seconds are all just this value).
+  int intervalSeconds;
   bool shuffle;
   int liveSeconds;
   int loopsBeforeNext;
 
+  /// Minutes rounded up, for the WorkManager static rotation (which is
+  /// minute-based and floored at 15 by Android).
+  int get intervalMinutes => (intervalSeconds / 60).ceil().clamp(1, 1 << 30);
+
   WallpaperSettings copyWith({
     bool? live,
-    int? intervalMinutes,
+    int? intervalSeconds,
     bool? shuffle,
     int? liveSeconds,
     int? loopsBeforeNext,
   }) =>
       WallpaperSettings(
         live: live ?? this.live,
-        intervalMinutes: intervalMinutes ?? this.intervalMinutes,
+        intervalSeconds: intervalSeconds ?? this.intervalSeconds,
         shuffle: shuffle ?? this.shuffle,
         liveSeconds: liveSeconds ?? this.liveSeconds,
         loopsBeforeNext: loopsBeforeNext ?? this.loopsBeforeNext,
@@ -157,7 +164,7 @@ class WallpaperSettings {
 
   Map<String, dynamic> toJson() => {
         'live': live,
-        'intervalMinutes': intervalMinutes,
+        'intervalSeconds': intervalSeconds,
         'shuffle': shuffle,
         'liveSeconds': liveSeconds,
         'loopsBeforeNext': loopsBeforeNext,
@@ -165,7 +172,9 @@ class WallpaperSettings {
 
   static WallpaperSettings fromJson(Map<String, dynamic> j) => WallpaperSettings(
         live: (j['live'] as bool?) ?? false,
-        intervalMinutes: (j['intervalMinutes'] as int?) ?? 5,
+        // Migrate the old minute-based field when present.
+        intervalSeconds: (j['intervalSeconds'] as int?) ??
+            (((j['intervalMinutes'] as int?) ?? 5) * 60),
         shuffle: (j['shuffle'] as bool?) ?? false,
         liveSeconds: (j['liveSeconds'] as int?) ?? 30,
         loopsBeforeNext: (j['loopsBeforeNext'] as int?) ?? 1,

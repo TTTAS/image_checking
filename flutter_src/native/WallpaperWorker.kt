@@ -99,7 +99,7 @@ object WallpaperStore {
         seconds: Int,
         loops: Int,
         shuffle: Boolean,
-        intervalMinutes: Int,
+        intervalSeconds: Int,
     ): Int {
         try {
             File(context.filesDir, "wallpaper_live_error.txt").delete()
@@ -199,7 +199,7 @@ object WallpaperStore {
             put("seconds", seconds)
             put("loops", loops)
             put("shuffle", shuffle)
-            put("intervalMinutes", intervalMinutes)
+            put("intervalSeconds", intervalSeconds)
         }
         File(context.filesDir, "wallpaper_live.json").writeText(root.toString())
         return home.length() + lock.length()

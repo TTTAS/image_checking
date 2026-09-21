@@ -129,13 +129,13 @@ class MainActivity : FlutterActivity() {
                         val seconds = call.argument<Int>("seconds") ?: 30
                         val loops = call.argument<Int>("loops") ?: 1
                         val shuffle = call.argument<Boolean>("shuffle") ?: false
-                        val intervalMinutes = call.argument<Int>("intervalMinutes") ?: 5
+                        val intervalSeconds = call.argument<Int>("intervalSeconds") ?: 300
                         if (homeItems.isEmpty() && lockItems.isEmpty()) {
                             result.error("ARGS", "homeItems / lockItems required", null)
                         } else {
                             applyLive(
                                 homeItems, lockItems, seconds, loops, shuffle,
-                                intervalMinutes, result,
+                                intervalSeconds, result,
                             )
                         }
                     }
@@ -349,7 +349,7 @@ class MainActivity : FlutterActivity() {
         seconds: Int,
         loops: Int,
         shuffle: Boolean,
-        intervalMinutes: Int,
+        intervalSeconds: Int,
         result: MethodChannel.Result,
     ) {
         Thread {
@@ -361,7 +361,7 @@ class MainActivity : FlutterActivity() {
                     seconds,
                     loops,
                     shuffle,
-                    intervalMinutes,
+                    intervalSeconds,
                 )
                 if (n == 0) {
                     runOnUiThread { result.error("EMPTY", "沒有可用的動態圖片", null) }

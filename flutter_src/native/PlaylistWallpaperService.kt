@@ -55,9 +55,9 @@ class PlaylistWallpaperService : WallpaperService() {
         private var loops = 1
         private var shuffle = false
         private var pos = 0
-        // Minutes between automatic rotations to the NEXT item (different image).
+        // Seconds between automatic rotations to the NEXT item (different image).
         // Windows within one item are navigated by swipe only, never on a timer.
-        private var intervalMinutes = 5
+        private var intervalSeconds = 300
         // Current item being shown, plus the continuous horizontal scroll
         // fraction (0..1) the launcher reports; used to pan the picture smoothly.
         private var current: Item? = null
@@ -181,7 +181,7 @@ class PlaylistWallpaperService : WallpaperService() {
             // Keep interacting from being cut off by the rotation timer.
             handler.removeCallbacks(nextItem)
             if (order.size > 1) {
-                handler.postDelayed(nextItem, intervalMinutes * 60_000L)
+                handler.postDelayed(nextItem, intervalSeconds * 1000L)
             }
         }
 
@@ -259,7 +259,11 @@ class PlaylistWallpaperService : WallpaperService() {
                 seconds = root.optInt("seconds", 30).coerceAtLeast(1)
                 loops = root.optInt("loops", 1).coerceAtLeast(1)
                 shuffle = root.optBoolean("shuffle", false)
-                intervalMinutes = root.optInt("intervalMinutes", 5).coerceAtLeast(1)
+                // New seconds key; fall back to the old minute key ×60.
+                intervalSeconds = root.optInt(
+                    "intervalSeconds",
+                    root.optInt("intervalMinutes", 5) * 60,
+                ).coerceAtLeast(1)
                 // Backward compatibility with manifests written by older builds.
                 parseItems(
                     root.optJSONArray("homeItems") ?: root.optJSONArray("items"),
@@ -402,7 +406,7 @@ class PlaylistWallpaperService : WallpaperService() {
             }
             handler.removeCallbacks(nextItem)
             if (order.size > 1) {
-                handler.postDelayed(nextItem, intervalMinutes * 60_000L)
+                handler.postDelayed(nextItem, intervalSeconds * 1000L)
             }
         }
 
