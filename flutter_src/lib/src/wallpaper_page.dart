@@ -61,7 +61,7 @@ class _WallpaperPageState extends State<WallpaperPage>
       message = '無法讀取播放診斷：$e';
     }
     if (!mounted) return;
-    final details = '版本 1.0.9+10\n$message';
+    final details = '版本 1.1.0+11\n$message';
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
