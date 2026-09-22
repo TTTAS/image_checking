@@ -55,11 +55,19 @@ class _VirtualAlbumDetailPageState extends State<VirtualAlbumDetailPage> {
   /// membership changed; a rename / cover change just repaints.
   void _onAlbumsChanged() {
     final album = _album;
-    if (album != null && listEquals(album.assetIds, _loadedIds)) {
+    if (album != null && _sameIds(album.assetIds, _loadedIds)) {
       if (mounted) setState(() {});
       return;
     }
     _reload();
+  }
+
+  static bool _sameIds(List<String> a, List<String> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
   }
 
   VirtualAlbum? get _album => VirtualAlbums.byId(widget.albumId);
