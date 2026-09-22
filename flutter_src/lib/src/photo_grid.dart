@@ -97,6 +97,8 @@ AppBar selectionAppBar({
       onPressed: selection.clear,
     ),
     title: Text('已選 ${selection.count}'),
+    // Most-used actions stay as icons; the rest live in the "⋯" overflow menu
+    // so the bar never overflows on narrow screens.
     actions: [
       IconButton(
         icon: const Icon(Icons.favorite_border),
@@ -116,16 +118,6 @@ AppBar selectionAppBar({
           },
         ),
       ),
-      if (onRemoveFromAlbum != null)
-        IconButton(
-          icon: const Icon(Icons.playlist_remove_outlined),
-          tooltip: '移出相簿',
-          onPressed: () async {
-            final chosen = selected();
-            selection.clear();
-            await onRemoveFromAlbum(chosen);
-          },
-        ),
       IconButton(
         icon: const Icon(Icons.visibility_off_outlined),
         tooltip: '隱藏',
@@ -136,51 +128,6 @@ AppBar selectionAppBar({
         },
       ),
       IconButton(
-        icon: const Icon(Icons.share_outlined),
-        tooltip: '分享',
-        onPressed: () => PhotoActions.share(selected()),
-      ),
-      Builder(
-        builder: (context) => PopupMenuButton<String>(
-          icon: const Icon(Icons.slideshow_outlined),
-          tooltip: '加入輪播',
-          onSelected: (v) async {
-            final targets = v == 'both'
-                ? [WallpaperTarget.home, WallpaperTarget.lock]
-                : [v == 'lock' ? WallpaperTarget.lock : WallpaperTarget.home];
-            final messenger = ScaffoldMessenger.of(context);
-            final navigator = Navigator.of(context);
-            final chosen = selected();
-            var added = 0;
-            for (final t in targets) {
-              added += await WallpaperPlaylist.addAll(chosen, t);
-            }
-            selection.clear();
-            final label = targets.length >= 2 ? '主畫面與鎖定' : targets.first.label;
-            messenger.showSnackBar(SnackBar(
-              content: Text(added > 0
-                  ? '已加入 $added 筆到$label輪播'
-                  : '沒有可加入的圖片或影片（格式不支援或已在清單中）'),
-              action: added > 0
-                  ? SnackBarAction(
-                      label: '檢視',
-                      onPressed: () => navigator.push(
-                        MaterialPageRoute<void>(
-                            builder: (_) =>
-                                WallpaperPage(initialTarget: targets.first)),
-                      ),
-                    )
-                  : null,
-            ));
-          },
-          itemBuilder: (context) => const [
-            PopupMenuItem(value: 'home', child: Text('加入主畫面輪播')),
-            PopupMenuItem(value: 'lock', child: Text('加入鎖定輪播')),
-            PopupMenuItem(value: 'both', child: Text('兩邊都加入輪播')),
-          ],
-        ),
-      ),
-      IconButton(
         icon: const Icon(Icons.delete_outline),
         tooltip: '刪除',
         onPressed: () async {
@@ -189,6 +136,82 @@ AppBar selectionAppBar({
           PhotoLibrary.instance.removeIds(deleted);
           if (reload != null && deleted.isNotEmpty) await reload();
         },
+      ),
+      Builder(
+        builder: (context) => PopupMenuButton<String>(
+          icon: const Icon(Icons.more_vert),
+          tooltip: '更多',
+          onSelected: (v) async {
+            final messenger = ScaffoldMessenger.of(context);
+            final navigator = Navigator.of(context);
+            final chosen = selected();
+            switch (v) {
+              case 'share':
+                await PhotoActions.share(chosen);
+              case 'remove':
+                selection.clear();
+                if (onRemoveFromAlbum != null) {
+                  await onRemoveFromAlbum(chosen);
+                }
+              case 'wp_home':
+              case 'wp_lock':
+              case 'wp_both':
+                {
+                  final targets = v == 'wp_both'
+                      ? [WallpaperTarget.home, WallpaperTarget.lock]
+                      : [
+                          v == 'wp_lock'
+                              ? WallpaperTarget.lock
+                              : WallpaperTarget.home
+                        ];
+                  var added = 0;
+                  for (final t in targets) {
+                    added += await WallpaperPlaylist.addAll(chosen, t);
+                  }
+                  selection.clear();
+                  final label =
+                      targets.length >= 2 ? '主畫面與鎖定' : targets.first.label;
+                  messenger.showSnackBar(SnackBar(
+                    content: Text(added > 0
+                        ? '已加入 $added 筆到$label輪播'
+                        : '沒有可加入的圖片或影片（格式不支援或已在清單中）'),
+                    action: added > 0
+                        ? SnackBarAction(
+                            label: '檢視',
+                            onPressed: () => navigator.push(
+                              MaterialPageRoute<void>(
+                                  builder: (_) => WallpaperPage(
+                                      initialTarget: targets.first)),
+                            ),
+                          )
+                        : null,
+                  ));
+                }
+            }
+          },
+          itemBuilder: (context) => [
+            const PopupMenuItem(
+              value: 'share',
+              child: ListTile(
+                leading: Icon(Icons.share_outlined),
+                title: Text('分享'),
+                contentPadding: EdgeInsets.zero,
+              ),
+            ),
+            if (onRemoveFromAlbum != null)
+              const PopupMenuItem(
+                value: 'remove',
+                child: ListTile(
+                  leading: Icon(Icons.playlist_remove_outlined),
+                  title: Text('移出相簿'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            const PopupMenuItem(value: 'wp_home', child: Text('加入主畫面輪播')),
+            const PopupMenuItem(value: 'wp_lock', child: Text('加入鎖定輪播')),
+            const PopupMenuItem(value: 'wp_both', child: Text('兩邊都加入輪播')),
+          ],
+        ),
       ),
     ],
   );
