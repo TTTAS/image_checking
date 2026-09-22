@@ -231,15 +231,14 @@ class _VirtualAlbumDetailPageState extends State<VirtualAlbumDetailPage> {
         SortMenuButton(current: _sort, onSelected: _changeSort),
         PopupMenuButton<String>(
           onSelected: (v) {
-            switch (v) {
-              case 'rename':
-                _rename();
-              case 'set':
-                setState(() => _pickingCover = true);
-              case 'clear':
-                _clearCover();
-              case 'delete':
-                _deleteAlbum();
+            if (v == 'rename') {
+              _rename();
+            } else if (v == 'set') {
+              setState(() => _pickingCover = true);
+            } else if (v == 'clear') {
+              _clearCover();
+            } else if (v == 'delete') {
+              _deleteAlbum();
             }
           },
           itemBuilder: (context) => [

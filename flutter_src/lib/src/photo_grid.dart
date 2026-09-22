@@ -145,74 +145,91 @@ AppBar selectionAppBar({
             final messenger = ScaffoldMessenger.of(context);
             final navigator = Navigator.of(context);
             final chosen = selected();
-            switch (v) {
-              case 'share':
-                await PhotoActions.share(chosen);
-              case 'remove':
-                selection.clear();
-                if (onRemoveFromAlbum != null) {
-                  await onRemoveFromAlbum(chosen);
-                }
-              case 'wp_home':
-              case 'wp_lock':
-              case 'wp_both':
-                {
-                  final targets = v == 'wp_both'
-                      ? [WallpaperTarget.home, WallpaperTarget.lock]
-                      : [
-                          v == 'wp_lock'
-                              ? WallpaperTarget.lock
-                              : WallpaperTarget.home
-                        ];
-                  var added = 0;
-                  for (final t in targets) {
-                    added += await WallpaperPlaylist.addAll(chosen, t);
-                  }
-                  selection.clear();
-                  final label =
-                      targets.length >= 2 ? '主畫面與鎖定' : targets.first.label;
-                  messenger.showSnackBar(SnackBar(
-                    content: Text(added > 0
-                        ? '已加入 $added 筆到$label輪播'
-                        : '沒有可加入的圖片或影片（格式不支援或已在清單中）'),
-                    action: added > 0
-                        ? SnackBarAction(
-                            label: '檢視',
-                            onPressed: () => navigator.push(
-                              MaterialPageRoute<void>(
-                                  builder: (_) => WallpaperPage(
-                                      initialTarget: targets.first)),
-                            ),
-                          )
-                        : null,
-                  ));
-                }
+            if (v == 'share') {
+              await PhotoActions.share(chosen);
+            } else if (v == 'remove') {
+              selection.clear();
+              if (onRemoveFromAlbum != null) {
+                await onRemoveFromAlbum(chosen);
+              }
+            } else {
+              // Wallpaper playlist: 'wp_home' / 'wp_lock' / 'wp_both'.
+              final targets = v == 'wp_both'
+                  ? [WallpaperTarget.home, WallpaperTarget.lock]
+                  : [
+                      v == 'wp_lock'
+                          ? WallpaperTarget.lock
+                          : WallpaperTarget.home
+                    ];
+              var added = 0;
+              for (final t in targets) {
+                added += await WallpaperPlaylist.addAll(chosen, t);
+              }
+              selection.clear();
+              final label =
+                  targets.length >= 2 ? '主畫面與鎖定' : targets.first.label;
+              messenger.showSnackBar(SnackBar(
+                content: Text(added > 0
+                    ? '已加入 $added 筆到$label輪播'
+                    : '沒有可加入的圖片或影片（格式不支援或已在清單中）'),
+                action: added > 0
+                    ? SnackBarAction(
+                        label: '檢視',
+                        onPressed: () => navigator.push(
+                          MaterialPageRoute<void>(
+                              builder: (_) => WallpaperPage(
+                                  initialTarget: targets.first)),
+                        ),
+                      )
+                    : null,
+              ));
             }
           },
           itemBuilder: (context) => [
             const PopupMenuItem(
               value: 'share',
-              child: ListTile(
-                leading: Icon(Icons.share_outlined),
-                title: Text('分享'),
-                contentPadding: EdgeInsets.zero,
-              ),
+              child: _MenuRow(icon: Icons.share_outlined, label: '分享'),
             ),
             if (onRemoveFromAlbum != null)
               const PopupMenuItem(
                 value: 'remove',
-                child: ListTile(
-                  leading: Icon(Icons.playlist_remove_outlined),
-                  title: Text('移出相簿'),
-                  contentPadding: EdgeInsets.zero,
-                ),
+                child: _MenuRow(
+                    icon: Icons.remove_circle_outline, label: '移出相簿'),
               ),
-            const PopupMenuItem(value: 'wp_home', child: Text('加入主畫面輪播')),
-            const PopupMenuItem(value: 'wp_lock', child: Text('加入鎖定輪播')),
-            const PopupMenuItem(value: 'wp_both', child: Text('兩邊都加入輪播')),
+            const PopupMenuItem(
+              value: 'wp_home',
+              child: _MenuRow(icon: Icons.slideshow_outlined, label: '加入主畫面輪播'),
+            ),
+            const PopupMenuItem(
+              value: 'wp_lock',
+              child: _MenuRow(icon: Icons.slideshow_outlined, label: '加入鎖定輪播'),
+            ),
+            const PopupMenuItem(
+              value: 'wp_both',
+              child: _MenuRow(icon: Icons.slideshow_outlined, label: '兩邊都加入輪播'),
+            ),
           ],
         ),
       ),
     ],
   );
+}
+
+/// A compact icon + label row for the selection bar's overflow menu.
+class _MenuRow extends StatelessWidget {
+  const _MenuRow({required this.icon, required this.label});
+
+  final IconData icon;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Icon(icon, size: 20),
+        const SizedBox(width: 12),
+        Text(label),
+      ],
+    );
+  }
 }
