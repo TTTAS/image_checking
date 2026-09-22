@@ -5,6 +5,7 @@ import 'src/collections.dart';
 import 'src/folder_covers.dart';
 import 'src/folder_names.dart';
 import 'src/grid_columns.dart';
+import 'src/virtual_albums.dart';
 import 'src/wallpaper_playlist.dart';
 
 Future<void> main() async {
@@ -13,6 +14,7 @@ Future<void> main() async {
   await GridColumns.init();
   await FolderCovers.init();
   await FolderNames.init();
+  await VirtualAlbums.init();
   await WallpaperPlaylist.init();
   runApp(const PhotoAlbumApp());
 }

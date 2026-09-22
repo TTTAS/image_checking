@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import 'add_to_album.dart';
 import 'collections.dart';
 import 'library.dart';
 import 'photo_actions.dart';
@@ -77,10 +78,15 @@ class SelectableThumb extends StatelessWidget {
 /// their own asset list; the home tabs read the shared [PhotoLibrary] and pass
 /// nothing, since hiding flows through [AppCollections] and deletion through
 /// [PhotoLibrary.removeIds].
+///
+/// When [onRemoveFromAlbum] is supplied (virtual-album detail), an extra
+/// "移出相簿" action appears that drops the selection from that album without
+/// touching the files.
 AppBar selectionAppBar({
   required SelectionController selection,
   required List<AssetEntity> all,
   Future<void> Function()? reload,
+  Future<void> Function(List<AssetEntity> assets)? onRemoveFromAlbum,
 }) {
   List<AssetEntity> selected() =>
       all.where((a) => selection.ids.contains(a.id)).toList();
@@ -100,6 +106,26 @@ AppBar selectionAppBar({
           selection.clear();
         },
       ),
+      Builder(
+        builder: (context) => IconButton(
+          icon: const Icon(Icons.add_to_photos_outlined),
+          tooltip: '加入相簿',
+          onPressed: () async {
+            await showAddToAlbumSheet(context, selection.ids.toList());
+            selection.clear();
+          },
+        ),
+      ),
+      if (onRemoveFromAlbum != null)
+        IconButton(
+          icon: const Icon(Icons.playlist_remove_outlined),
+          tooltip: '移出相簿',
+          onPressed: () async {
+            final chosen = selected();
+            selection.clear();
+            await onRemoveFromAlbum(chosen);
+          },
+        ),
       IconButton(
         icon: const Icon(Icons.visibility_off_outlined),
         tooltip: '隱藏',
