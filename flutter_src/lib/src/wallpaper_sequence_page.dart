@@ -71,7 +71,12 @@ class _WallpaperSequencePageState extends State<WallpaperSequencePage> {
   /// overwrite each other — that stale-capture bug made the divider feel numb.
   void _resize(double dy) {
     setState(() {
-      _previewHeight = ((_previewHeight ?? _minH) + dy).clamp(_minH, _maxH);
+      var v = ((_previewHeight ?? _minH) + dy).clamp(_minH, _maxH);
+      // Snap fully closed near either end so the other pane goes full-screen
+      // cleanly (no leftover sliver).
+      if (v < 44) v = _minH;
+      if (v > _maxH - 44) v = _maxH;
+      _previewHeight = v;
     });
   }
 
@@ -161,8 +166,11 @@ class _WallpaperSequencePageState extends State<WallpaperSequencePage> {
       body: LayoutBuilder(
         builder: (context, constraints) {
           final total = constraints.maxHeight;
-          _minH = 90.0;
-          _maxH = (total * 0.75).clamp(_minH, total);
+          const handleH = 26.0;
+          // Allow either pane to be dragged fully closed: 0 hides the preview
+          // (list full), total-handle hides the list (image full).
+          _minH = 0.0;
+          _maxH = (total - handleH).clamp(0.0, total);
           _previewHeight ??= (total * 0.42).clamp(_minH, _maxH);
           final h = _previewHeight!.clamp(_minH, _maxH);
           return ValueListenableBuilder<List<WallpaperItem>>(
@@ -178,14 +186,18 @@ class _WallpaperSequencePageState extends State<WallpaperSequencePage> {
                 children: [
                   SizedBox(
                     height: h,
-                    child: _PreviewPanel(
-                      asset: _asset,
-                      windows: windows,
-                      screenAspect: screenAspect,
-                      onWindowMoved: (index, window) =>
-                          WallpaperPlaylist.updateWindow(
-                              _target, _asset.id, index, window),
-                    ),
+                    // Too short to show the preview's controls → render nothing
+                    // (avoids overflow); the pane is effectively hidden.
+                    child: h < 56
+                        ? const SizedBox.shrink()
+                        : _PreviewPanel(
+                            asset: _asset,
+                            windows: windows,
+                            screenAspect: screenAspect,
+                            onWindowMoved: (index, window) =>
+                                WallpaperPlaylist.updateWindow(
+                                    _target, _asset.id, index, window),
+                          ),
                   ),
                   _ResizeHandle(onDelta: _resize),
                   Expanded(
