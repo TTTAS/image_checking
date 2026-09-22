@@ -97,6 +97,23 @@ class MainActivity : FlutterActivity() {
                             }
                         }
                     }
+                    "renderCropSave" -> {
+                        val src = call.argument<String>("srcPath")
+                        val side = call.argument<String>("side") ?: "home"
+                        val id = call.argument<String>("id")
+                        val zoom = (call.argument<Double>("zoom") ?: 0.0).toFloat()
+                        val focusX = (call.argument<Double>("focusX") ?: 0.5).toFloat()
+                        val focusY = (call.argument<Double>("focusY") ?: 0.5).toFloat()
+                        if (src == null || id == null) {
+                            result.error("ARGS", "srcPath / id required", null)
+                        } else {
+                            runOffThread(result) {
+                                WallpaperStore.renderCropSave(
+                                    applicationContext, src, side, id, zoom, focusX, focusY,
+                                )
+                            }
+                        }
+                    }
                     "applyRotation" -> {
                         val home = call.argument<List<String>>("home") ?: emptyList()
                         val lock = call.argument<List<String>>("lock") ?: emptyList()
@@ -112,10 +129,14 @@ class MainActivity : FlutterActivity() {
                         val seconds = call.argument<Int>("seconds") ?: 30
                         val loops = call.argument<Int>("loops") ?: 1
                         val shuffle = call.argument<Boolean>("shuffle") ?: false
+                        val intervalSeconds = call.argument<Int>("intervalSeconds") ?: 300
                         if (homeItems.isEmpty() && lockItems.isEmpty()) {
                             result.error("ARGS", "homeItems / lockItems required", null)
                         } else {
-                            applyLive(homeItems, lockItems, seconds, loops, shuffle, result)
+                            applyLive(
+                                homeItems, lockItems, seconds, loops, shuffle,
+                                intervalSeconds, result,
+                            )
                         }
                     }
                     "openLiveWallpaperPreview" -> openLiveWallpaperPreview(result)
@@ -328,6 +349,7 @@ class MainActivity : FlutterActivity() {
         seconds: Int,
         loops: Int,
         shuffle: Boolean,
+        intervalSeconds: Int,
         result: MethodChannel.Result,
     ) {
         Thread {
@@ -339,6 +361,7 @@ class MainActivity : FlutterActivity() {
                     seconds,
                     loops,
                     shuffle,
+                    intervalSeconds,
                 )
                 if (n == 0) {
                     runOnUiThread { result.error("EMPTY", "沒有可用的動態圖片", null) }

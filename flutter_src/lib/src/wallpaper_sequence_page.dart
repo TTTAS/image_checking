@@ -1,0 +1,570 @@
+import 'package:flutter/material.dart';
+import 'package:photo_manager/photo_manager.dart';
+import 'package:photo_manager_image_provider/photo_manager_image_provider.dart';
+
+import 'wallpaper_crop_page.dart';
+import 'wallpaper_playlist.dart';
+
+/// Editor for one playlist item's "window sequence": an ordered list of
+/// framings ([CropWindow]) of a single original image. On the home screen the
+/// live wallpaper pans continuously between these windows as you swipe.
+///
+/// A resizable split view: the top pane is a phone-shaped viewport for
+/// fine-tuning the selected window by dragging the picture inside it; the
+/// bottom pane is the window list. Drag the divider between them to resize.
+class WallpaperSequencePage extends StatefulWidget {
+  const WallpaperSequencePage({
+    super.key,
+    required this.asset,
+    required this.target,
+  });
+
+  final AssetEntity asset;
+  final WallpaperTarget target;
+
+  /// Distinct outline colours cycled per window.
+  static const List<Color> _palette = [
+    Color(0xFF42A5F5), // blue
+    Color(0xFFEF5350), // red
+    Color(0xFF66BB6A), // green
+    Color(0xFFFFCA28), // amber
+    Color(0xFFAB47BC), // purple
+    Color(0xFF26C6DA), // cyan
+    Color(0xFFFF7043), // deep orange
+  ];
+
+  static Color colorFor(int index) => _palette[index % _palette.length];
+
+  /// Full-height, screen-width strips tiled left→right to cover the whole image
+  /// (centred), so swiping pans across the entire wide picture. zoom = 1.0 is
+  /// exactly "fill height, crop width" in the crop transform space.
+  static List<CropWindow> autoSliceWindows(
+      double imgAspect, double screenAspect) {
+    final visible = screenAspect / imgAspect;
+    if (visible <= 0 || visible >= 0.999) {
+      return [CropWindow(zoom: 1.0)];
+    }
+    final n = (1 / visible).ceil().clamp(2, 12);
+    final windows = <CropWindow>[];
+    for (var i = 0; i < n; i++) {
+      final fx = visible / 2 + i * (1 - visible) / (n - 1);
+      windows.add(CropWindow(zoom: 1.0, focusX: fx, focusY: 0.5));
+    }
+    return windows;
+  }
+
+  @override
+  State<WallpaperSequencePage> createState() => _WallpaperSequencePageState();
+}
+
+class _WallpaperSequencePageState extends State<WallpaperSequencePage> {
+  /// Height of the top preview pane; null until first laid out.
+  double? _previewHeight;
+  double _minH = 90;
+  double _maxH = 400;
+
+  AssetEntity get _asset => widget.asset;
+  WallpaperTarget get _target => widget.target;
+
+  /// Resize the preview pane. Accumulates from the CURRENT height (not a value
+  /// captured during build), so multiple drag events within one frame don't
+  /// overwrite each other — that stale-capture bug made the divider feel numb.
+  void _resize(double dy) {
+    setState(() {
+      var v = ((_previewHeight ?? _minH) + dy).clamp(_minH, _maxH);
+      // Snap fully closed near either end so the other pane goes full-screen
+      // cleanly (no leftover sliver).
+      if (v < 44) v = _minH;
+      if (v > _maxH - 44) v = _maxH;
+      _previewHeight = v;
+    });
+  }
+
+  Future<void> _addWindow() async {
+    final window = await Navigator.of(context).push<CropWindow>(
+      MaterialPageRoute<CropWindow>(
+        builder: (_) => WallpaperCropPage(asset: _asset, pickWindow: true),
+      ),
+    );
+    if (window != null) {
+      await WallpaperPlaylist.addWindow(_target, _asset.id, window);
+    }
+  }
+
+  Future<void> _editWindow(int index, CropWindow current) async {
+    final window = await Navigator.of(context).push<CropWindow>(
+      MaterialPageRoute<CropWindow>(
+        builder: (_) => WallpaperCropPage(
+          asset: _asset,
+          pickWindow: true,
+          initialZoom: current.zoom,
+          initialFocusX: current.focusX,
+          initialFocusY: current.focusY,
+        ),
+      ),
+    );
+    if (window != null) {
+      await WallpaperPlaylist.updateWindow(_target, _asset.id, index, window);
+    }
+  }
+
+  Future<void> _autoSlice(double imgAspect, double screenAspect) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final windows =
+        WallpaperSequencePage.autoSliceWindows(imgAspect, screenAspect);
+    if (windows.length < 2) {
+      messenger.showSnackBar(const SnackBar(
+        content: Text('這張圖沒有比螢幕寬，用不到左右切片。'),
+      ));
+      return;
+    }
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('自動切片'),
+        content: Text(
+          '會把這張圖切成 ${windows.length} 個「滿高、螢幕寬」的視窗，'
+          '由左到右覆蓋整張圖，取代目前的視窗設定。要繼續嗎？',
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('取消')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('切片')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await WallpaperPlaylist.setWindows(_target, _asset.id, windows);
+      messenger.showSnackBar(
+          SnackBar(content: Text('已切成 ${windows.length} 個視窗，左右滑動看完整張圖')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final screenAspect =
+        mq.size.height > 0 ? mq.size.width / mq.size.height : 0.5;
+    final iw = _asset.width.toDouble();
+    final ih = _asset.height.toDouble();
+    final imgAspect = (iw > 0 && ih > 0) ? iw / ih : 1.0;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('視窗序列（${_target.label}）'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.view_column_outlined),
+            tooltip: '自動切片（寬圖左右可滑）',
+            onPressed: () => _autoSlice(imgAspect, screenAspect),
+          ),
+        ],
+      ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          final total = constraints.maxHeight;
+          const handleH = 26.0;
+          // Allow either pane to be dragged fully closed: 0 hides the preview
+          // (list full), total-handle hides the list (image full).
+          _minH = 0.0;
+          _maxH = (total - handleH).clamp(0.0, total);
+          _previewHeight ??= (total * 0.42).clamp(_minH, _maxH);
+          final h = _previewHeight!.clamp(_minH, _maxH);
+          return ValueListenableBuilder<List<WallpaperItem>>(
+            valueListenable: WallpaperPlaylist.listFor(_target),
+            builder: (context, list, _) {
+              final item = list.firstWhere(
+                (e) => e.id == _asset.id,
+                orElse: () =>
+                    WallpaperItem(id: _asset.id, mime: '', animated: false),
+              );
+              final windows = item.windows;
+              return Column(
+                children: [
+                  SizedBox(
+                    height: h,
+                    // Too short to show the preview's controls → render nothing
+                    // (avoids overflow); the pane is effectively hidden.
+                    child: h < 56
+                        ? const SizedBox.shrink()
+                        : _PreviewPanel(
+                            asset: _asset,
+                            windows: windows,
+                            screenAspect: screenAspect,
+                            onWindowMoved: (index, window) =>
+                                WallpaperPlaylist.updateWindow(
+                                    _target, _asset.id, index, window),
+                          ),
+                  ),
+                  _ResizeHandle(onDelta: _resize),
+                  Expanded(
+                    child: ReorderableListView.builder(
+                      padding: const EdgeInsets.only(top: 4, bottom: 88),
+                      itemCount: windows.length,
+                      onReorder: (o, n) => WallpaperPlaylist.reorderWindows(
+                          _target, _asset.id, o, n),
+                      itemBuilder: (context, i) {
+                        final w = windows[i];
+                        return _WindowTile(
+                          key: ValueKey('${_asset.id}_win_$i'),
+                          asset: _asset,
+                          index: i,
+                          window: w,
+                          color: WallpaperSequencePage.colorFor(i),
+                          canDelete: windows.length > 1,
+                          onEdit: () => _editWindow(i, w),
+                          onDelete: () => WallpaperPlaylist.removeWindow(
+                              _target, _asset.id, i),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _addWindow,
+        icon: const Icon(Icons.add_photo_alternate_outlined),
+        label: const Text('新增視窗'),
+      ),
+    );
+  }
+}
+
+/// Draggable divider between the preview and the list. Drag up/down to resize.
+class _ResizeHandle extends StatelessWidget {
+  const _ResizeHandle({required this.onDelta});
+
+  final void Function(double dy) onDelta;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onVerticalDragUpdate: (d) => onDelta(d.delta.dy),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.resizeRow,
+        child: Container(
+          height: 26,
+          width: double.infinity,
+          color: scheme.surfaceContainerHighest,
+          alignment: Alignment.center,
+          child: Container(
+            width: 44,
+            height: 5,
+            decoration: BoxDecoration(
+              color: scheme.onSurfaceVariant,
+              borderRadius: BorderRadius.circular(3),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+double _clampFocus(double v, double half) {
+  if (half >= 0.5) return 0.5;
+  return v.clamp(half, 1 - half);
+}
+
+/// The top pane: a phone-shaped viewport that fills the available height; drag
+/// the picture inside it to fine-tune the selected window. A small header picks
+/// which window to edit.
+class _PreviewPanel extends StatefulWidget {
+  const _PreviewPanel({
+    required this.asset,
+    required this.windows,
+    required this.screenAspect,
+    required this.onWindowMoved,
+  });
+
+  final AssetEntity asset;
+  final List<CropWindow> windows;
+  final double screenAspect;
+  final void Function(int index, CropWindow window) onWindowMoved;
+
+  @override
+  State<_PreviewPanel> createState() => _PreviewPanelState();
+}
+
+class _PreviewPanelState extends State<_PreviewPanel> {
+  int _selected = 0;
+  bool _dragging = false;
+  double _liveX = 0.5;
+  double _liveY = 0.5;
+
+  int get _sel => _selected.clamp(0, widget.windows.length - 1);
+  CropWindow get _selWindow => widget.windows[_sel];
+  double get _fx => _dragging ? _liveX : _selWindow.focusX;
+  double get _fy => _dragging ? _liveY : _selWindow.focusY;
+
+  /// Image aspect from the asset (width / height).
+  double get _imgAspect {
+    final w = widget.asset.width.toDouble();
+    final h = widget.asset.height.toDouble();
+    return (w > 0 && h > 0) ? w / h : 1.0;
+  }
+
+  ({double w, double h}) _disp(double vw, double vh) {
+    final a = _imgAspect;
+    final cover = (vw / a > vh) ? vw / a : vh;
+    final contain = (vw / a < vh) ? vw / a : vh;
+    final s = _selWindow.zoom <= 0 ? contain : cover * _selWindow.zoom;
+    return (w: a * s, h: s);
+  }
+
+  void _panStart() => setState(() {
+        _dragging = true;
+        _liveX = _selWindow.focusX;
+        _liveY = _selWindow.focusY;
+      });
+
+  void _panBy(Offset delta, double vw, double vh) {
+    final disp = _disp(vw, vh);
+    setState(() {
+      _liveX = _clampFocus(_liveX - delta.dx / disp.w, (vw / 2) / disp.w);
+      _liveY = _clampFocus(_liveY - delta.dy / disp.h, (vh / 2) / disp.h);
+    });
+  }
+
+  void _panEnd() {
+    if (widget.windows.isNotEmpty) {
+      widget.onWindowMoved(
+        _sel,
+        CropWindow(zoom: _selWindow.zoom, focusX: _liveX, focusY: _liveY),
+      );
+    }
+    setState(() => _dragging = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (widget.windows.isEmpty) return const SizedBox.shrink();
+    final n = widget.windows.length;
+    return Column(
+      children: [
+        Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.chevron_left),
+              tooltip: '上一個視窗',
+              onPressed:
+                  _sel > 0 ? () => setState(() => _selected = _sel - 1) : null,
+            ),
+            Text('視窗 ${_sel + 1} / $n',
+                style: const TextStyle(fontWeight: FontWeight.w600)),
+            IconButton(
+              icon: const Icon(Icons.chevron_right),
+              tooltip: '下一個視窗',
+              onPressed: _sel < n - 1
+                  ? () => setState(() => _selected = _sel + 1)
+                  : null,
+            ),
+            const Spacer(),
+            const Padding(
+              padding: EdgeInsets.only(right: 12),
+              child: Text('框內滑動移動圖片',
+                  style: TextStyle(fontSize: 11, color: Colors.grey)),
+            ),
+          ],
+        ),
+        Expanded(
+          child: Container(
+            color: Colors.black,
+            width: double.infinity,
+            alignment: Alignment.center,
+            child: AspectRatio(
+              aspectRatio: widget.screenAspect,
+              child: LayoutBuilder(
+                builder: (context, c) {
+                  final vw = c.maxWidth;
+                  final vh = c.maxHeight;
+                  final disp = _disp(vw, vh);
+                  final left = vw / 2 - _fx * disp.w;
+                  final top = vh / 2 - _fy * disp.h;
+                  return GestureDetector(
+                    behavior: HitTestBehavior.opaque,
+                    onPanStart: (_) => _panStart(),
+                    onPanUpdate: (d) => _panBy(d.delta, vw, vh),
+                    onPanEnd: (_) => _panEnd(),
+                    onPanCancel: () => setState(() => _dragging = false),
+                    child: ClipRect(
+                      child: Stack(
+                        children: [
+                          Positioned(
+                            left: left,
+                            top: top,
+                            width: disp.w,
+                            height: disp.h,
+                            child: AssetEntityImage(
+                              widget.asset,
+                              isOriginal: false,
+                              thumbnailSize: ThumbnailSize.square(1080),
+                              thumbnailFormat: ThumbnailFormat.jpeg,
+                              fit: BoxFit.fill,
+                              errorBuilder: (context, error, stack) =>
+                                  const ColoredBox(color: Colors.black),
+                            ),
+                          ),
+                          if (_dragging)
+                            const Positioned.fill(
+                              child: IgnorePointer(
+                                child: CustomPaint(painter: _ViewportGuides()),
+                              ),
+                            ),
+                          Positioned.fill(
+                            child: IgnorePointer(
+                              child: DecoratedBox(
+                                decoration: BoxDecoration(
+                                  border: Border.all(
+                                    color:
+                                        WallpaperSequencePage.colorFor(_sel),
+                                    width: 2.5,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _ViewportGuides extends CustomPainter {
+  const _ViewportGuides();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final thirds = Paint()
+      ..color = Colors.white.withValues(alpha: 0.35)
+      ..strokeWidth = 1;
+    for (var i = 1; i <= 2; i++) {
+      final x = size.width * i / 3;
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), thirds);
+      final y = size.height * i / 3;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), thirds);
+    }
+    final center = Paint()
+      ..color = const Color(0xFFFFCA28).withValues(alpha: 0.7)
+      ..strokeWidth = 1.4;
+    canvas.drawLine(
+        Offset(size.width / 2, 0), Offset(size.width / 2, size.height), center);
+    canvas.drawLine(Offset(0, size.height / 2),
+        Offset(size.width, size.height / 2), center);
+  }
+
+  @override
+  bool shouldRepaint(covariant _ViewportGuides oldDelegate) => false;
+}
+
+class _WindowTile extends StatelessWidget {
+  const _WindowTile({
+    super.key,
+    required this.asset,
+    required this.index,
+    required this.window,
+    required this.color,
+    required this.canDelete,
+    required this.onEdit,
+    required this.onDelete,
+  });
+
+  final AssetEntity asset;
+  final int index;
+  final CropWindow window;
+  final Color color;
+  final bool canDelete;
+  final VoidCallback onEdit;
+  final VoidCallback onDelete;
+
+  @override
+  Widget build(BuildContext context) {
+    final alignment = Alignment(
+      (window.focusX * 2 - 1).clamp(-1.0, 1.0),
+      (window.focusY * 2 - 1).clamp(-1.0, 1.0),
+    );
+    return ListTile(
+      contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+      onTap: onEdit,
+      leading: SizedBox(
+        width: 44,
+        height: 72,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(6),
+          child: Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: color, width: 2),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: ColoredBox(
+              color: Colors.black,
+              child: AssetEntityImage(
+                asset,
+                isOriginal: false,
+                thumbnailSize: ThumbnailSize.square(240),
+                thumbnailFormat: ThumbnailFormat.jpeg,
+                fit: window.isDefault ? BoxFit.contain : BoxFit.cover,
+                alignment: window.isDefault ? Alignment.center : alignment,
+                filterQuality: FilterQuality.low,
+                errorBuilder: (context, error, stack) => const Icon(
+                  Icons.broken_image_outlined,
+                  size: 20,
+                  color: Colors.white54,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+      title: Text('視窗 ${index + 1}'),
+      subtitle: Text(
+        window.isDefault ? '完整置中' : '自訂裁切',
+        style: TextStyle(
+          fontSize: 12,
+          color: window.isDefault ? null : Colors.green,
+        ),
+      ),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          IconButton(
+            icon: const Icon(Icons.crop),
+            tooltip: '放大編輯（可縮放）',
+            visualDensity: VisualDensity.compact,
+            onPressed: onEdit,
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete_outline),
+            tooltip: canDelete ? '刪除視窗' : '至少要保留一個視窗',
+            visualDensity: VisualDensity.compact,
+            onPressed: canDelete ? onDelete : null,
+          ),
+          ReorderableDragStartListener(
+            index: index,
+            child: const Padding(
+              padding: EdgeInsets.symmetric(horizontal: 4),
+              child: Icon(Icons.drag_handle),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}

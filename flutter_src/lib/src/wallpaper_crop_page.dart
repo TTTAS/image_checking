@@ -15,8 +15,14 @@ import 'wallpaper_playlist.dart';
 /// The image is ALWAYS the original; the crop is stored as a normalized
 /// transform ([initialZoom]/[initialFocusX]/[initialFocusY]) so re-entering
 /// restores the same view and the user can still zoom out (below "cover") to
-/// recover parts that were previously cropped off. On confirm we capture the
-/// crop frame to a screen-sized bitmap (WYSIWYG).
+/// recover parts that were previously cropped off.
+///
+/// Two modes:
+///  * Default: a "set as wallpaper" screen that captures the crop frame to a
+///    screen-sized bitmap and writes it as the wallpaper (used from the viewer).
+///  * [pickWindow] = true: a framing picker used by the window-sequence editor.
+///    It does NOT touch the wallpaper; confirming pops a [CropWindow] describing
+///    the chosen zoom/focus.
 ///
 /// Default (zoom <= 0) = fit the entire image inside the screen, centered,
 /// with letterbox bars. Pinch-zoom in to fill / crop.
@@ -24,16 +30,18 @@ class WallpaperCropPage extends StatefulWidget {
   const WallpaperCropPage({
     super.key,
     required this.asset,
-    this.target,
+    this.pickWindow = false,
     this.initialZoom = 0.0,
     this.initialFocusX = 0.5,
     this.initialFocusY = 0.5,
   });
 
   final AssetEntity asset;
-  final WallpaperTarget? target;
 
-  /// Saved crop transform to restore (playlist mode).
+  /// When true, the page returns a [CropWindow] instead of setting a wallpaper.
+  final bool pickWindow;
+
+  /// Saved crop transform to restore.
   /// <= 0 means "fit entire image, centered" (the default).
   final double initialZoom;
   final double initialFocusX;
@@ -44,17 +52,20 @@ class WallpaperCropPage extends StatefulWidget {
 }
 
 class _WallpaperCropPageState extends State<WallpaperCropPage> {
+  /// Outline drawn around the wallpaper frame so its boundary is visible even
+  /// when the default framing leaves black letterbox bars on a black page.
+  static const Color _frameColor = Color(0xFFFFCA28); // amber
+
   final GlobalKey _cropKey = GlobalKey();
   final TransformationController _transform = TransformationController();
 
-  bool _applied = false;
   bool _busy = false;
+  bool _applied = false;
 
   int _flags = kFlagSystem;
 
   double _bw = 0, _bh = 0, _cw = 0, _ch = 0;
-
-  bool get _isPlaylist => widget.target != null;
+  double _minScale = 0;
 
   bool get _animated {
     final m = (widget.asset.mimeType ?? '').toLowerCase();
@@ -77,6 +88,24 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
     return Matrix4.identity()
       ..translate(tx, ty)
       ..scale(zoom);
+  }
+
+  /// After a pan/zoom gesture ends, nudge near-aligned values to the exact
+  /// target so a crop that is "off by a hair" lands cleanly: focus snaps to the
+  /// exact centre, and zoom snaps to exactly "fit whole image" or "fill screen".
+  void _snapOnEnd() {
+    if (_cw <= 0 || _ch <= 0) return;
+    var (z, fx, fy) = _currentCrop();
+    const posTol = 0.025;
+    const zoomTol = 0.06;
+    if ((fx - 0.5).abs() < posTol) fx = 0.5;
+    if ((fy - 0.5).abs() < posTol) fy = 0.5;
+    if (_minScale > 0 && (z - _minScale).abs() < zoomTol) {
+      z = _minScale;
+    } else if ((z - 1.0).abs() < zoomTol) {
+      z = 1.0;
+    }
+    _transform.value = _matrixFor(z, fx, fy);
   }
 
   (double, double, double) _currentCrop() {
@@ -110,50 +139,11 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
         .showSnackBar(SnackBar(content: Text('操作失敗：$m')));
   }
 
-  Future<void> _saveCropOnly() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    final t = widget.target!;
-    final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
-    try {
-      final (z, fx, fy) = _currentCrop();
-      final bytes = await _captureBytes();
-      final path = await NativeWallpaper.saveCrop(bytes, t.key, widget.asset.id);
-      await WallpaperPlaylist.setCropped(t, widget.asset.id, path,
-          zoom: z, focusX: fx, focusY: fy);
-      if (!mounted) return;
-      messenger.showSnackBar(
-          const SnackBar(content: Text('已儲存裁切（不會立刻換桌布，下次輪播會用它）')));
-      navigator.pop();
-    } catch (e) {
-      _fail(e);
-    }
-  }
-
-  Future<void> _setNowPlaylist() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    final t = widget.target!;
-    final messenger = ScaffoldMessenger.of(context);
-    final navigator = Navigator.of(context);
-    try {
-      final (z, fx, fy) = _currentCrop();
-      final bytes = await _captureBytes();
-      final path = await NativeWallpaper.saveCrop(bytes, t.key, widget.asset.id);
-      await WallpaperPlaylist.setCropped(t, widget.asset.id, path,
-          zoom: z, focusX: fx, focusY: fy);
-      final honored = await NativeWallpaper.setWallpaperBytes(bytes, t.flag);
-      if (!mounted) return;
-      var msg = '已設為${t.label}的桌布，並存為裁切';
-      if (!honored && t.flag != kFlagSystem) {
-        msg += '（此裝置較舊，無法分開，已套用單一桌布）';
-      }
-      messenger.showSnackBar(SnackBar(content: Text(msg)));
-      navigator.pop();
-    } catch (e) {
-      _fail(e);
-    }
+  /// Window-picker mode: pop the chosen framing back to the sequence editor.
+  void _confirmPick() {
+    final (z, fx, fy) = _currentCrop();
+    Navigator.of(context)
+        .pop(CropWindow(zoom: z, focusX: fx, focusY: fy));
   }
 
   Future<void> _setSingle() async {
@@ -195,7 +185,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
         title: Text(
-          _isPlaylist ? '裁切（${widget.target!.label}）' : '裁切桌布',
+          widget.pickWindow ? '選擇視窗範圍' : '裁切桌布',
           style: const TextStyle(fontSize: 16),
         ),
       ),
@@ -205,7 +195,10 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
             child: Center(
               child: AspectRatio(
                 aspectRatio: cropAspect,
-                child: RepaintBoundary(
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    RepaintBoundary(
                   key: _cropKey,
                   child: ClipRect(
                     child: LayoutBuilder(
@@ -231,6 +224,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                         _ch = ch;
                         final fitScale = (bw / cw < bh / ch ? bw / cw : bh / ch);
                         final minScale = fitScale.clamp(0.05, 1.0);
+                        _minScale = minScale;
                         const maxScale = 6.0;
 
                         if (!_applied) {
@@ -253,6 +247,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                           boundaryMargin: const EdgeInsets.all(double.infinity),
                           minScale: minScale,
                           maxScale: maxScale,
+                          onInteractionEnd: (_) => _snapOnEnd(),
                           child: SizedBox(
                             width: cw,
                             height: ch,
@@ -271,6 +266,36 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                       },
                     ),
                   ),
+                    ),
+                    // Alignment guides (rule-of-thirds grid + centre crosshair)
+                    // and the frame outline both sit OUTSIDE the RepaintBoundary
+                    // above, so they help you line the crop up on screen but are
+                    // never captured into the saved wallpaper image.
+                    const IgnorePointer(
+                      child: CustomPaint(painter: _GuidesPainter()),
+                    ),
+                    // The image's own edges, live-updated as you pan/zoom. Each
+                    // edge turns green when it lines up with the crop frame edge.
+                    IgnorePointer(
+                      child: AnimatedBuilder(
+                        animation: _transform,
+                        builder: (context, _) => CustomPaint(
+                          painter: _ImageEdgePainter(
+                            matrix: _transform.value,
+                            cw: _cw,
+                            ch: _ch,
+                          ),
+                        ),
+                      ),
+                    ),
+                    IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          border: Border.all(color: _frameColor, width: 2.5),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -278,7 +303,8 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
           const Padding(
             padding: EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Text(
-              '預設把整張置中塞進畫面（多出來的邊留黑）。雘按放大可以切滿螢幕；框內就是桌布範圍。',
+              '黃色外框是螢幕（桌布）邊界，青色線是圖片邊緣——當某條邊貼齊時會變綠色。'
+              '九宮格與中央十字線幫你對齊；放開手會自動貼齊正中／完整／滿版。',
               style: TextStyle(color: Colors.white70, fontSize: 12),
               textAlign: TextAlign.center,
             ),
@@ -287,58 +313,38 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
             const Padding(
               padding: EdgeInsets.only(bottom: 4),
               child: Text(
-                '動態圖片只會擷取單一靜態畫面（會動要等 M3）。',
+                '動態圖片只會擷取單一靜態畫面。',
                 style: TextStyle(color: Colors.white54, fontSize: 11),
                 textAlign: TextAlign.center,
               ),
             ),
-          _isPlaylist ? _playlistBar() : _singleBar(),
+          widget.pickWindow ? _pickBar() : _singleBar(),
         ],
       ),
     );
   }
 
-  Widget _playlistBar() {
+  Widget _pickBar() {
     return Material(
       color: Colors.black,
       child: SafeArea(
         top: false,
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
+          child: Row(
             children: [
-              const Text(
-                '「儲存裁切」只更新這張的裁切、不會立刻換桌布；「設為桌布」會存並立刻套用這一邊。',
-                style: TextStyle(color: Colors.white60, fontSize: 11),
-                textAlign: TextAlign.center,
+              Expanded(
+                child: FilledButton.icon(
+                  icon: const Icon(Icons.check),
+                  label: const Text('使用這個視窗'),
+                  onPressed: _confirmPick,
+                ),
               ),
-              const SizedBox(height: 10),
-              Row(
-                children: [
-                  Expanded(
-                    child: OutlinedButton(
-                      onPressed: _busy ? null : _saveCropOnly,
-                      style: OutlinedButton.styleFrom(
-                          foregroundColor: Colors.white),
-                      child: const Text('儲存裁切'),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: FilledButton.icon(
-                      icon: _busy
-                          ? const SizedBox(
-                              width: 16,
-                              height: 16,
-                              child: CircularProgressIndicator(strokeWidth: 2),
-                            )
-                          : const Icon(Icons.wallpaper),
-                      label: Text(_busy ? '處理中…' : '設為桌布'),
-                      onPressed: _busy ? null : _setNowPlaylist,
-                    ),
-                  ),
-                ],
+              const SizedBox(width: 8),
+              OutlinedButton(
+                onPressed: () => Navigator.of(context).pop(),
+                style: OutlinedButton.styleFrom(foregroundColor: Colors.white),
+                child: const Text('取消'),
               ),
             ],
           ),
@@ -405,4 +411,92 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
       ),
     );
   }
+}
+
+/// Rule-of-thirds grid plus a brighter centre crosshair, drawn over the crop
+/// frame to help line the picture up. Painted outside the capture boundary, so
+/// none of these lines appear in the saved wallpaper.
+class _GuidesPainter extends CustomPainter {
+  const _GuidesPainter();
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final thirds = Paint()
+      ..color = Colors.white.withValues(alpha: 0.35)
+      ..strokeWidth = 1;
+    // Vertical + horizontal thirds.
+    for (var i = 1; i <= 2; i++) {
+      final x = size.width * i / 3;
+      canvas.drawLine(Offset(x, 0), Offset(x, size.height), thirds);
+      final y = size.height * i / 3;
+      canvas.drawLine(Offset(0, y), Offset(size.width, y), thirds);
+    }
+    // Centre crosshair, brighter so "dead centre" is easy to hit.
+    final center = Paint()
+      ..color = const Color(0xFFFFCA28).withValues(alpha: 0.7)
+      ..strokeWidth = 1.4;
+    canvas.drawLine(
+      Offset(size.width / 2, 0),
+      Offset(size.width / 2, size.height),
+      center,
+    );
+    canvas.drawLine(
+      Offset(0, size.height / 2),
+      Offset(size.width, size.height / 2),
+      center,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _GuidesPainter oldDelegate) => false;
+}
+
+/// Draws the original image's own edges (as transformed by the current pan/zoom)
+/// over the crop frame. Each edge turns green when it lines up with the matching
+/// crop-frame edge, so you can tell exactly when the crop sits flush against the
+/// picture's border. Drawn outside the capture boundary, so it is never saved.
+class _ImageEdgePainter extends CustomPainter {
+  _ImageEdgePainter({required this.matrix, required this.cw, required this.ch});
+
+  final Matrix4 matrix;
+  final double cw;
+  final double ch;
+
+  static const Color _edge = Color(0xFF26C6DA); // cyan
+  static const Color _aligned = Color(0xFF66BB6A); // green
+  static const double _tol = 2.5;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (cw <= 0 || ch <= 0) return;
+    final z = matrix.getMaxScaleOnAxis();
+    final t = matrix.getTranslation();
+    final left = t.x;
+    final top = t.y;
+    final right = t.x + z * cw;
+    final bottom = t.y + z * ch;
+
+    Paint edgePaint(bool alignedEdge) => Paint()
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = alignedEdge ? 3.0 : 2.0
+      ..color = alignedEdge ? _aligned : _edge;
+
+    final leftFlush = (left - 0).abs() < _tol;
+    final rightFlush = (right - size.width).abs() < _tol;
+    final topFlush = (top - 0).abs() < _tol;
+    final bottomFlush = (bottom - size.height).abs() < _tol;
+
+    canvas.drawLine(
+        Offset(left, top), Offset(right, top), edgePaint(topFlush));
+    canvas.drawLine(
+        Offset(left, bottom), Offset(right, bottom), edgePaint(bottomFlush));
+    canvas.drawLine(
+        Offset(left, top), Offset(left, bottom), edgePaint(leftFlush));
+    canvas.drawLine(
+        Offset(right, top), Offset(right, bottom), edgePaint(rightFlush));
+  }
+
+  @override
+  bool shouldRepaint(covariant _ImageEdgePainter old) =>
+      old.matrix != matrix || old.cw != cw || old.ch != ch;
 }

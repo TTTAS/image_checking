@@ -3,8 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'native_wallpaper.dart';
-import 'wallpaper_crop_page.dart';
 import 'wallpaper_playlist.dart';
+import 'wallpaper_sequence_page.dart';
 import 'wallpaper_video_crop_page.dart';
 import 'widgets.dart';
 
@@ -89,43 +89,48 @@ class _WallpaperPageState extends State<WallpaperPage>
       messenger.showSnackBar(const SnackBar(content: Text('找不到原始圖片')));
       return;
     }
+    final initialZoom = item.windows.isNotEmpty ? item.windows.first.zoom : 0.0;
     if (asset.type == AssetType.video || item.isVideo) {
       navigator.push(MaterialPageRoute<void>(
         builder: (_) => WallpaperVideoCropPage(
           asset: asset,
           target: target,
-          initialZoom: item.cropZoom,
+          initialZoom: initialZoom,
         ),
       ));
       return;
     }
+    // Images open the window-sequence editor: one image can hold several
+    // ordered framings, all as a single playlist item.
     navigator.push(MaterialPageRoute<void>(
-      builder: (_) => WallpaperCropPage(
-        asset: asset,
-        target: target,
-        initialZoom: item.cropZoom,
-        initialFocusX: item.cropFocusX,
-        initialFocusY: item.cropFocusY,
-      ),
+      builder: (_) => WallpaperSequencePage(asset: asset, target: target),
     ));
   }
 
+  /// Static rotation renders one bitmap per window (in order) for each item, so
+  /// a multi-window item contributes several frames to the timed rotation.
   Future<List<String>> _resolvePaths(
       List<WallpaperItem> items, WallpaperTarget t) async {
     final paths = <String>[];
     for (final it in items) {
-      if (it.filePath.isNotEmpty) {
-        paths.add(it.filePath);
-        continue;
-      }
       try {
         final asset = await _asset(it.id);
         final file = await asset?.file;
         if (file == null) continue;
-        final path =
-            await NativeWallpaper.centerCropSave(file.path, t.key, it.id);
-        await WallpaperPlaylist.setCropped(t, it.id, path);
-        paths.add(path);
+        for (var w = 0; w < it.windows.length; w++) {
+          final win = it.windows[w];
+          try {
+            final path = await NativeWallpaper.renderCropSave(
+              file.path,
+              t.key,
+              '${it.id}_w$w',
+              zoom: win.zoom,
+              focusX: win.focusX,
+              focusY: win.focusY,
+            );
+            if (path.isNotEmpty) paths.add(path);
+          } catch (_) {}
+        }
       } catch (_) {}
     }
     return paths;
@@ -213,11 +218,17 @@ class _WallpaperPageState extends State<WallpaperPage>
             'srcPath': file.path,
             'id': it.id,
             'ext': _extFor(it.mime, file.path),
-            'zoom': it.cropZoom,
-            'focusX': it.cropFocusX,
-            'focusY': it.cropFocusY,
             'animated': _looksAnimated(it),
             'video': asset.type == AssetType.video || it.isVideo,
+            // Each item carries its ordered window framings; the native engine
+            // expands them into a swipeable/timed sub-sequence.
+            'windows': it.windows
+                .map((w) => {
+                      'zoom': w.zoom,
+                      'focusX': w.focusX,
+                      'focusY': w.focusY,
+                    })
+                .toList(),
           });
         } catch (_) {}
       }
@@ -233,17 +244,20 @@ class _WallpaperPageState extends State<WallpaperPage>
     }
     try {
       final secs = s.liveSeconds <= 0 ? 30 : s.liveSeconds;
+      final interval = s.intervalSeconds <= 0 ? 300 : s.intervalSeconds;
       await NativeWallpaper.applyLive(
         homeItems: homeItems,
         lockItems: lockItems,
         liveSeconds: secs,
         loops: s.loopsBeforeNext,
         shuffle: s.shuffle,
+        intervalSeconds: interval,
       );
       await NativeWallpaper.openLiveWallpaperPreview();
       if (!mounted) return;
       messenger.showSnackBar(SnackBar(
-        content: Text('請在系統預覽按「設定」，並選擇主畫面或主畫面與鎖定畫面；每 $secs 秒換下一項。'),
+        content: Text(
+            '請在系統預覽按「設定」，並選擇主畫面或主畫面與鎖定畫面；左右滑動會平移圖片，多張桌布每 ${_durationText(interval)}自動輪換。'),
       ));
     } on PlatformException catch (e) {
       messenger.showSnackBar(
@@ -277,7 +291,7 @@ class _WallpaperPageState extends State<WallpaperPage>
       );
       messenger.showSnackBar(SnackBar(
         content: Text(
-            '已套用：主畫面 ${homePaths.length} 張、鎖定 ${lockPaths.length} 張，約每 ${_intervalText(s.intervalMinutes)}換一張'),
+            '已套用：主畫面 ${homePaths.length} 張、鎖定 ${lockPaths.length} 張，鎖定約每 ${_durationText(s.intervalMinutes * 60)}換一張（鎖定最短 15 分鐘）'),
       ));
     } on PlatformException catch (e) {
       messenger.showSnackBar(
@@ -298,11 +312,7 @@ class _WallpaperPageState extends State<WallpaperPage>
     }
   }
 
-  static String _intervalText(int minutes) {
-    if (minutes >= 1440) return '${minutes ~/ 1440} 天';
-    if (minutes >= 60) return '${minutes ~/ 60} 小時';
-    return '$minutes 分鐘';
-  }
+  static String _durationText(int seconds) => formatDuration(seconds);
 
   Future<void> _confirmClear() async {
     final label = _tab.label;
@@ -330,11 +340,6 @@ class _WallpaperPageState extends State<WallpaperPage>
       appBar: AppBar(
         title: const Text('輪播桌布'),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.tune),
-            tooltip: '設定',
-            onPressed: _openSettings,
-          ),
           PopupMenuButton<String>(
             onSelected: (v) {
               if (v == 'clear') _confirmClear();
@@ -352,8 +357,8 @@ class _WallpaperPageState extends State<WallpaperPage>
           const Padding(
             padding: EdgeInsets.fromLTRB(12, 10, 12, 0),
             child: Text(
-              '圖片與影片可混合輪播。套用後會開系統「動態桌布」預覽，請按設定並選擇主畫面或主畫面與鎖定畫面。'
-              '圖片與影片預設完整置中顯示，不會裁掉內容。',
+              '套用後會開系統「動態桌布」預覽，請按設定並選擇主畫面或主畫面與鎖定畫面。'
+              '主畫面左滑／右滑切換同一張圖的視窗；不同張桌布會依下方設定的間隔自動輪換。',
               style: TextStyle(fontSize: 12),
               textAlign: TextAlign.center,
             ),
@@ -379,7 +384,7 @@ class _WallpaperPageState extends State<WallpaperPage>
           ),
           Expanded(child: _list(_tab)),
           const Divider(height: 1),
-          const _IntervalBar(),
+          const _ControlBar(),
           _ActionBar(onApply: _apply, onStop: _stop),
         ],
       ),
@@ -411,14 +416,6 @@ class _WallpaperPageState extends State<WallpaperPage>
     );
   }
 
-  void _openSettings() {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      isScrollControlled: true,
-      builder: (_) => const _SettingsSheet(),
-    );
-  }
 }
 
 class _EmptyState extends StatelessWidget {
@@ -498,12 +495,16 @@ class _PlaylistTile extends StatelessWidget {
       subtitle: Text(
         item.isVideo
             ? '影片（完整置中）'
-            : item.cropped
-                ? '已裁切'
-                : '完整置中（可點按裁切）',
+            : item.windowCount > 1
+                ? '${item.windowCount} 個視窗序列（可點按編輯）'
+                : item.customized
+                    ? '已裁切（可點按加視窗）'
+                    : '完整置中（可點按裁切／加視窗）',
         style: TextStyle(
           fontSize: 12,
-          color: item.cropped || item.isVideo ? Colors.green : null,
+          color: item.customized || item.windowCount > 1 || item.isVideo
+              ? Colors.green
+              : null,
         ),
       ),
       trailing: Row(
@@ -530,51 +531,6 @@ class _PlaylistTile extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-class _IntervalBar extends StatelessWidget {
-  const _IntervalBar();
-
-  static const _secs = [10, 15, 30, 60, 120];
-
-  static String _label(int sec) =>
-      sec < 60 ? '$sec 秒' : '${sec ~/ 60} 分鐘';
-
-  @override
-  Widget build(BuildContext context) {
-    return ValueListenableBuilder<WallpaperSettings>(
-      valueListenable: WallpaperPlaylist.settings,
-      builder: (context, s, _) {
-        final current = s.liveSeconds <= 0 ? 30 : s.liveSeconds;
-        return Padding(
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                '每個項目播多久換下一個（現在 ${_label(current)}；改完要再按套用）',
-                style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 6),
-              Wrap(
-                spacing: 8,
-                children: [
-                  for (final sec in _secs)
-                    ChoiceChip(
-                      label: Text(_label(sec)),
-                      selected: current == sec,
-                      onSelected: (_) => WallpaperPlaylist.updateSettings(
-                        s.copyWith(liveSeconds: sec),
-                      ),
-                    ),
-                ],
-              ),
-            ],
-          ),
-        );
-      },
     );
   }
 }
@@ -611,75 +567,118 @@ class _ActionBar extends StatelessWidget {
   }
 }
 
-class _SettingsSheet extends StatefulWidget {
-  const _SettingsSheet();
-
-  @override
-  State<_SettingsSheet> createState() => _SettingsSheetState();
+/// Formats a duration in seconds as e.g. "1 小時 5 分 30 秒" (zero parts omitted).
+String formatDuration(int seconds) {
+  if (seconds <= 0) return '0 秒';
+  final h = seconds ~/ 3600;
+  final m = (seconds % 3600) ~/ 60;
+  final s = seconds % 60;
+  final parts = <String>[];
+  if (h > 0) parts.add('$h 小時');
+  if (m > 0) parts.add('$m 分');
+  if (s > 0) parts.add('$s 秒');
+  return parts.join(' ');
 }
 
-class _SettingsSheetState extends State<_SettingsSheet> {
-  late WallpaperSettings _s;
+/// Compact control row: a button to set how often different wallpapers rotate,
+/// plus a random-order toggle. Replaces the old settings sheet.
+class _ControlBar extends StatelessWidget {
+  const _ControlBar();
 
-  static const _intervals = <int, String>{
-    15: '約 15 分鐘',
-    60: '1 小時',
-    360: '6 小時',
-    1440: '每天',
-  };
+  Future<void> _pick(BuildContext context, WallpaperSettings s) async {
+    final total = s.intervalSeconds;
+    final hCtl = TextEditingController(text: (total ~/ 3600).toString());
+    final mCtl = TextEditingController(text: ((total % 3600) ~/ 60).toString());
+    final sCtl = TextEditingController(text: (total % 60).toString());
 
-  @override
-  void initState() {
-    super.initState();
-    _s = WallpaperPlaylist.settings.value.copyWith();
+    Widget field(TextEditingController c, String unit, {bool autofocus = false}) {
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SizedBox(
+            width: 52,
+            child: TextField(
+              controller: c,
+              autofocus: autofocus,
+              keyboardType: TextInputType.number,
+              inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+              textAlign: TextAlign.center,
+              decoration: const InputDecoration(
+                isDense: true,
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(unit),
+        ],
+      );
+    }
+
+    final chosen = await showDialog<int>(
+      context: context,
+      builder: (ctx) {
+        int total() =>
+            (int.tryParse(hCtl.text.trim()) ?? 0) * 3600 +
+            (int.tryParse(mCtl.text.trim()) ?? 0) * 60 +
+            (int.tryParse(sCtl.text.trim()) ?? 0);
+        return AlertDialog(
+          title: const Text('多久自動換一張桌布'),
+          content: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              field(hCtl, '時', autofocus: true),
+              const SizedBox(width: 8),
+              field(mCtl, '分'),
+              const SizedBox(width: 8),
+              field(sCtl, '秒'),
+            ],
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('取消')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, total()),
+                child: const Text('確定')),
+          ],
+        );
+      },
+    );
+    if (chosen != null && chosen > 0) {
+      // At least 1 second; cap at 7 days.
+      await WallpaperPlaylist.updateSettings(
+          s.copyWith(intervalSeconds: chosen.clamp(1, 7 * 24 * 3600)));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.only(bottom: 8),
-              child: Text('輪播設定',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
-            ),
-            const Text('鎖定畫面靜態輪播間隔（最短約 15 分鐘）',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 8,
-              children: [
-                for (final e in _intervals.entries)
-                  ChoiceChip(
-                    label: Text(e.value),
-                    selected: _s.intervalMinutes == e.key,
-                    onSelected: (_) => setState(
-                        () => _s = _s.copyWith(intervalMinutes: e.key)),
-                  ),
-              ],
-            ),
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('隨機順序'),
-              value: _s.shuffle,
-              onChanged: (v) => setState(() => _s = _s.copyWith(shuffle: v)),
-            ),
-            const SizedBox(height: 8),
-            FilledButton(
-              onPressed: () async {
-                await WallpaperPlaylist.updateSettings(_s);
-                if (context.mounted) Navigator.pop(context);
-              },
-              child: const Text('完成'),
-            ),
-          ],
-        ),
-      ),
+    return ValueListenableBuilder<WallpaperSettings>(
+      valueListenable: WallpaperPlaylist.settings,
+      builder: (context, s, _) {
+        return Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  icon: const Icon(Icons.timer_outlined),
+                  label: Text('自動換桌布：每 ${formatDuration(s.intervalSeconds)}'),
+                  onPressed: () => _pick(context, s),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilterChip(
+                avatar: const Icon(Icons.shuffle, size: 18),
+                label: const Text('隨機'),
+                selected: s.shuffle,
+                onSelected: (v) =>
+                    WallpaperPlaylist.updateSettings(s.copyWith(shuffle: v)),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

@@ -47,6 +47,29 @@ class NativeWallpaper {
     return path ?? '';
   }
 
+  /// Renders an original file at [srcPath] framed by a single crop window
+  /// ([zoom]/[focusX]/[focusY]) to a screen-sized JPEG under [side]/[id].jpg.
+  /// [zoom] <= 0 means "fit whole image, centered". Used by the static rotation
+  /// to pre-render each window of an item. Returns the saved file path.
+  static Future<String> renderCropSave(
+    String srcPath,
+    String side,
+    String id, {
+    required double zoom,
+    required double focusX,
+    required double focusY,
+  }) async {
+    final path = await _channel.invokeMethod<String>('renderCropSave', {
+      'srcPath': srcPath,
+      'side': side,
+      'id': id,
+      'zoom': zoom,
+      'focusX': focusX,
+      'focusY': focusY,
+    });
+    return path ?? '';
+  }
+
   /// Applies the static rotation for both lists. [homePaths]/[lockPaths] are
   /// ordered cropped-file paths (either may be empty). Sets the first of each
   /// side now and schedules a periodic job to advance about every
@@ -82,6 +105,7 @@ class NativeWallpaper {
     required int liveSeconds,
     required int loops,
     required bool shuffle,
+    required int intervalSeconds,
   }) async {
     await _channel.invokeMethod<int>('applyLive', {
       'homeItems': homeItems,
@@ -89,6 +113,7 @@ class NativeWallpaper {
       'seconds': liveSeconds,
       'loops': loops,
       'shuffle': shuffle,
+      'intervalSeconds': intervalSeconds,
     });
   }
 
