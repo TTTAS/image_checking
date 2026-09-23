@@ -185,51 +185,54 @@ AppBar selectionAppBar({
               ));
             }
           },
+          // NOTE: icons here are inlined as literal `Icons.*` so release icon
+          // tree-shaking can subset the font. Passing an IconData through a
+          // widget field (a variable) breaks `flutter build --release`.
           itemBuilder: (context) => [
             const PopupMenuItem(
               value: 'share',
-              child: _MenuRow(icon: Icons.share_outlined, label: '分享'),
+              child: Row(children: [
+                Icon(Icons.share_outlined, size: 20),
+                SizedBox(width: 12),
+                Text('分享'),
+              ]),
             ),
             if (onRemoveFromAlbum != null)
               const PopupMenuItem(
                 value: 'remove',
-                child: _MenuRow(
-                    icon: Icons.remove_circle_outline, label: '移出相簿'),
+                child: Row(children: [
+                  Icon(Icons.remove_circle_outline, size: 20),
+                  SizedBox(width: 12),
+                  Text('移出相簿'),
+                ]),
               ),
             const PopupMenuItem(
               value: 'wp_home',
-              child: _MenuRow(icon: Icons.slideshow_outlined, label: '加入主畫面輪播'),
+              child: Row(children: [
+                Icon(Icons.slideshow_outlined, size: 20),
+                SizedBox(width: 12),
+                Text('加入主畫面輪播'),
+              ]),
             ),
             const PopupMenuItem(
               value: 'wp_lock',
-              child: _MenuRow(icon: Icons.slideshow_outlined, label: '加入鎖定輪播'),
+              child: Row(children: [
+                Icon(Icons.slideshow_outlined, size: 20),
+                SizedBox(width: 12),
+                Text('加入鎖定輪播'),
+              ]),
             ),
             const PopupMenuItem(
               value: 'wp_both',
-              child: _MenuRow(icon: Icons.slideshow_outlined, label: '兩邊都加入輪播'),
+              child: Row(children: [
+                Icon(Icons.slideshow_outlined, size: 20),
+                SizedBox(width: 12),
+                Text('兩邊都加入輪播'),
+              ]),
             ),
           ],
         ),
       ),
     ],
   );
-}
-
-/// A compact icon + label row for the selection bar's overflow menu.
-class _MenuRow extends StatelessWidget {
-  const _MenuRow({required this.icon, required this.label});
-
-  final IconData icon;
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
-      children: [
-        Icon(icon, size: 20),
-        const SizedBox(width: 12),
-        Text(label),
-      ],
-    );
-  }
 }
