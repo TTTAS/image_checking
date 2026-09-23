@@ -272,7 +272,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                     // above, so they help you line the crop up on screen but are
                     // never captured into the saved wallpaper image.
                     const IgnorePointer(
-                      child: CustomPaint(painter: _GuidesPainter()),
+                      child: CustomPaint(painter: CropGuidesPainter()),
                     ),
                     // The image's own edges, live-updated as you pan/zoom. Each
                     // edge turns green when it lines up with the crop frame edge.
@@ -280,7 +280,7 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
                       child: AnimatedBuilder(
                         animation: _transform,
                         builder: (context, _) => CustomPaint(
-                          painter: _ImageEdgePainter(
+                          painter: CropEdgePainter(
                             matrix: _transform.value,
                             cw: _cw,
                             ch: _ch,
@@ -416,8 +416,8 @@ class _WallpaperCropPageState extends State<WallpaperCropPage> {
 /// Rule-of-thirds grid plus a brighter centre crosshair, drawn over the crop
 /// frame to help line the picture up. Painted outside the capture boundary, so
 /// none of these lines appear in the saved wallpaper.
-class _GuidesPainter extends CustomPainter {
-  const _GuidesPainter();
+class CropGuidesPainter extends CustomPainter {
+  const CropGuidesPainter();
 
   @override
   void paint(Canvas canvas, Size size) {
@@ -448,15 +448,15 @@ class _GuidesPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _GuidesPainter oldDelegate) => false;
+  bool shouldRepaint(covariant CropGuidesPainter oldDelegate) => false;
 }
 
 /// Draws the original image's own edges (as transformed by the current pan/zoom)
 /// over the crop frame. Each edge turns green when it lines up with the matching
 /// crop-frame edge, so you can tell exactly when the crop sits flush against the
 /// picture's border. Drawn outside the capture boundary, so it is never saved.
-class _ImageEdgePainter extends CustomPainter {
-  _ImageEdgePainter({required this.matrix, required this.cw, required this.ch});
+class CropEdgePainter extends CustomPainter {
+  CropEdgePainter({required this.matrix, required this.cw, required this.ch});
 
   final Matrix4 matrix;
   final double cw;
@@ -497,6 +497,6 @@ class _ImageEdgePainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _ImageEdgePainter old) =>
+  bool shouldRepaint(covariant CropEdgePainter old) =>
       old.matrix != matrix || old.cw != cw || old.ch != ch;
 }
