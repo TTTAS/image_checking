@@ -89,13 +89,17 @@ class _WallpaperPageState extends State<WallpaperPage>
       messenger.showSnackBar(const SnackBar(content: Text('找不到原始圖片')));
       return;
     }
-    final initialZoom = item.windows.isNotEmpty ? item.windows.first.zoom : 0.0;
+    final firstWindow =
+        item.windows.isNotEmpty ? item.windows.first : null;
+    final initialZoom = firstWindow?.zoom ?? 0.0;
     if (asset.type == AssetType.video || item.isVideo) {
       navigator.push(MaterialPageRoute<void>(
         builder: (_) => WallpaperVideoCropPage(
           asset: asset,
           target: target,
           initialZoom: initialZoom,
+          initialFocusX: firstWindow?.focusX ?? 0.5,
+          initialFocusY: firstWindow?.focusY ?? 0.5,
         ),
       ));
       return;
