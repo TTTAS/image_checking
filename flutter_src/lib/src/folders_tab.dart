@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'add_to_album.dart';
 import 'app.dart';
 import 'collections.dart';
 import 'folder_covers.dart';
@@ -10,6 +11,8 @@ import 'folder_names.dart';
 import 'media.dart';
 import 'photo_actions.dart';
 import 'selection.dart';
+import 'virtual_album_detail.dart';
+import 'virtual_albums.dart';
 import 'widgets.dart';
 
 /// How the folder list itself is ordered.
@@ -59,12 +62,16 @@ class _FoldersTabState extends State<FoldersTab> {
   // Cache: bucket id -> its cover asset (first photo by filename).
   final Map<String, AssetEntity?> _coverCache = {};
 
+  // Cache: virtual album id -> its resolved cover asset.
+  final Map<String, AssetEntity?> _albumCoverCache = {};
+
   @override
   void initState() {
     super.initState();
     widget.scrollToTop.addListener(_scrollToTop);
     FolderCovers.map.addListener(_onCoversChanged);
     FolderNames.map.addListener(_rebuild);
+    VirtualAlbums.albums.addListener(_onAlbumsChanged);
     _init();
   }
 
@@ -73,10 +80,18 @@ class _FoldersTabState extends State<FoldersTab> {
     widget.scrollToTop.removeListener(_scrollToTop);
     FolderCovers.map.removeListener(_onCoversChanged);
     FolderNames.map.removeListener(_rebuild);
+    VirtualAlbums.albums.removeListener(_onAlbumsChanged);
     _scroll.dispose();
     _searchCtrl.dispose();
     _selection.dispose();
     super.dispose();
+  }
+
+  /// A virtual album changed (created / renamed / photos or cover changed):
+  /// drop the cover cache and repaint the "我的相簿" section.
+  void _onAlbumsChanged() {
+    _albumCoverCache.clear();
+    if (mounted) setState(() {});
   }
 
   void _scrollToTop() {
@@ -429,47 +444,135 @@ class _FoldersTabState extends State<FoldersTab> {
     );
   }
 
+  // ---- Virtual albums ("我的相簿") ---------------------------------------
+
+  List<VirtualAlbum> get _visibleAlbums {
+    final q = _query.trim().toLowerCase();
+    final all = VirtualAlbums.albums.value;
+    if (q.isEmpty) return all;
+    return all.where((a) => a.name.toLowerCase().contains(q)).toList();
+  }
+
+  /// Resolves an album's cover: the chosen cover if set, otherwise its first
+  /// photo. Cached per album id (cleared when albums change).
+  Future<AssetEntity?> _albumCover(VirtualAlbum album) async {
+    if (_albumCoverCache.containsKey(album.id)) {
+      return _albumCoverCache[album.id];
+    }
+    final id = album.coverId ??
+        (album.assetIds.isNotEmpty ? album.assetIds.first : null);
+    final cover = id == null ? null : await AssetEntity.fromId(id);
+    _albumCoverCache[album.id] = cover;
+    return cover;
+  }
+
+  Future<void> _createAlbum() async {
+    final name = await promptAlbumName(context);
+    if (name == null) return;
+    final id = await VirtualAlbums.create(name);
+    if (!mounted) return;
+    _openAlbum(id);
+  }
+
+  void _openAlbum(String id) {
+    Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => VirtualAlbumDetailPage(albumId: id),
+    ));
+  }
+
+  static const _cardGrid = SliverGridDelegateWithFixedCrossAxisCount(
+    crossAxisCount: 2,
+    crossAxisSpacing: 8,
+    mainAxisSpacing: 12,
+    childAspectRatio: 0.82,
+  );
+
   Widget _buildScrollable() {
-    if (_folders.isEmpty) {
-      return _emptyState('沒有找到資料夾');
+    final selecting = _selection.active;
+    final folders = _sorted;
+    final albums = _visibleAlbums;
+
+    final slivers = <Widget>[];
+
+    // "我的相簿" (virtual albums) sit above the physical device folders. They
+    // are hidden while whole-album selection is active, since that mode acts on
+    // MediaStore buckets only.
+    if (!selecting) {
+      slivers.add(_sectionHeader('我的相簿'));
+      slivers.add(SliverPadding(
+        padding: const EdgeInsets.symmetric(horizontal: 8),
+        sliver: SliverGrid(
+          gridDelegate: _cardGrid,
+          delegate: SliverChildBuilderDelegate(
+            (context, i) {
+              if (i == albums.length) {
+                return _AddAlbumCard(onTap: _createAlbum);
+              }
+              final album = albums[i];
+              return _AlbumCard(
+                album: album,
+                coverLoader: () => _albumCover(album),
+                onTap: () => _openAlbum(album.id),
+              );
+            },
+            childCount: albums.length + 1,
+          ),
+        ),
+      ));
+      slivers.add(_sectionHeader('裝置資料夾'));
     }
-    final sorted = _sorted;
-    if (sorted.isEmpty) {
-      return _emptyState('找不到符合的資料夾');
+
+    if (folders.isEmpty) {
+      slivers.add(SliverToBoxAdapter(
+        child: SizedBox(
+          height: 220,
+          child: Center(
+            child: Text(_folders.isEmpty ? '沒有找到資料夾' : '找不到符合的資料夾'),
+          ),
+        ),
+      ));
+    } else {
+      slivers.add(SliverPadding(
+        padding: const EdgeInsets.fromLTRB(8, 0, 8, 12),
+        sliver: SliverGrid(
+          gridDelegate: _cardGrid,
+          delegate: SliverChildBuilderDelegate(
+            (context, i) {
+              final folder = folders[i];
+              return _FolderCard(
+                folder: folder.path,
+                count: folder.count,
+                coverLoader: () => _cover(folder.path),
+                selection: _selection,
+                onReturn: () => _reload(showSpinner: false),
+              );
+            },
+            childCount: folders.length,
+          ),
+        ),
+      ));
     }
-    return GridView.builder(
+
+    return CustomScrollView(
       controller: _scroll,
       physics: const AlwaysScrollableScrollPhysics(),
-      key: const PageStorageKey('folders_grid'),
-      padding: const EdgeInsets.all(8),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 2,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 12,
-        childAspectRatio: 0.82,
-      ),
-      itemCount: sorted.length,
-      itemBuilder: (context, i) {
-        final folder = sorted[i];
-        return _FolderCard(
-          folder: folder.path,
-          count: folder.count,
-          coverLoader: () => _cover(folder.path),
-          selection: _selection,
-          onReturn: () => _reload(showSpinner: false),
-        );
-      },
+      key: const PageStorageKey('folders_scroll'),
+      slivers: slivers,
     );
   }
 
-  // Scrollable so pull-to-refresh still works when there's nothing to show.
-  Widget _emptyState(String message) {
-    return ListView(
-      controller: _scroll,
-      physics: const AlwaysScrollableScrollPhysics(),
-      children: [
-        SizedBox(height: 400, child: Center(child: Text(message))),
-      ],
+  Widget _sectionHeader(String title) {
+    return SliverToBoxAdapter(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(14, 14, 14, 6),
+        child: Text(
+          title,
+          style: Theme.of(context)
+              .textTheme
+              .titleSmall
+              ?.copyWith(fontWeight: FontWeight.w700),
+        ),
+      ),
     );
   }
 }
@@ -555,6 +658,102 @@ class _FolderCard extends StatelessWidget {
             '$count 張',
             style: Theme.of(context).textTheme.bodySmall,
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A card for one virtual album ("我的相簿"). Cover = the chosen photo, or the
+/// first one in the album.
+class _AlbumCard extends StatelessWidget {
+  const _AlbumCard({
+    required this.album,
+    required this.coverLoader,
+    required this.onTap,
+  });
+
+  final VirtualAlbum album;
+  final Future<AssetEntity?> Function() coverLoader;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: FutureBuilder<AssetEntity?>(
+                future: coverLoader(),
+                builder: (context, snap) {
+                  final cover = snap.data;
+                  if (cover == null) {
+                    return Container(
+                      color:
+                          Theme.of(context).colorScheme.surfaceContainerHighest,
+                      child: const Icon(Icons.photo_album_outlined, size: 36),
+                    );
+                  }
+                  return PhotoThumb(asset: cover, side: 400);
+                },
+              ),
+            ),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            album.name,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(fontWeight: FontWeight.w500),
+          ),
+          Text(
+            '${album.count} 張',
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// The trailing "＋ 新增相簿" tile in the "我的相簿" grid.
+class _AddAlbumCard extends StatelessWidget {
+  const _AddAlbumCard({required this.onTap});
+
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                color: scheme.surfaceContainerHighest,
+                border: Border.all(color: scheme.outlineVariant),
+              ),
+              child: Icon(Icons.add, size: 36, color: scheme.primary),
+            ),
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            '新增相簿',
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(fontWeight: FontWeight.w500),
+          ),
+          // Blank line keeps this card the same height as album cards, which
+          // carry a "N 張" count line.
+          Text(' ', style: Theme.of(context).textTheme.bodySmall),
         ],
       ),
     );

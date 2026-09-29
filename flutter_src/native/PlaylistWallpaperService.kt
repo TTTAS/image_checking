@@ -580,10 +580,12 @@ class PlaylistWallpaperService : WallpaperService() {
                     fx = 0.5f
                     fy = 0.5f
                 } else {
-                    // Single zoomed window: pan the visible viewport across the
-                    // whole width as the user scrolls.
-                    val halfW = (surfaceW / 2f) / (scale * width)
-                    fx = if (halfW >= 0.5f) 0.5f else halfW + (1 - 2 * halfW) * frac
+                    // Single window = show EXACTLY the framed crop (WYSIWYG):
+                    // honor the saved focus so the wallpaper matches the crop
+                    // preview and stays put. (To pan a wide picture across the
+                    // home-screen scroll, add multiple windows — the >=2 branch
+                    // above interpolates between them.)
+                    fx = w0.fx
                     fy = w0.fy
                 }
             }

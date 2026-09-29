@@ -6,6 +6,7 @@ import 'package:pro_image_editor/pro_image_editor.dart';
 import 'package:share_plus/share_plus.dart';
 
 import 'collections.dart';
+import 'virtual_albums.dart';
 
 /// Central place for the photo operations that touch the system gallery.
 class PhotoActions {
@@ -16,6 +17,7 @@ class PhotoActions {
     final deleted = await PhotoManager.editor.deleteWithIds(ids);
     if (deleted.isNotEmpty) {
       await AppCollections.forget(deleted);
+      await VirtualAlbums.forget(deleted);
     }
     return deleted;
   }
