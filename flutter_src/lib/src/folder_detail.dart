@@ -52,9 +52,13 @@ class _FolderDetailPageState extends State<FolderDetailPage> {
     await _reload();
   }
 
-  Future<void> _reload() async {
+  /// Reloads the folder's photos. When [showSpinner] is false the current
+  /// grid stays on screen and is swapped in one go once every page is loaded,
+  /// so returning from the viewer keeps the scroll position instead of
+  /// jumping back to the top.
+  Future<void> _reload({bool showSpinner = true}) async {
     final token = ++_loadToken;
-    setState(() => _loading = true);
+    if (showSpinner) setState(() => _loading = true);
 
     final loaded = <AssetEntity>[];
     for (var page = 0;; page++) {
@@ -63,15 +67,17 @@ class _FolderDetailPageState extends State<FolderDetailPage> {
       if (token != _loadToken || !mounted) return;
       if (batch.isEmpty) break;
       loaded.addAll(batch);
-      setState(() {
-        _all = List<AssetEntity>.of(loaded);
-        _loading = false;
-      });
+      if (showSpinner) {
+        setState(() {
+          _all = List<AssetEntity>.of(loaded);
+          _loading = false;
+        });
+      }
       if (batch.length < _pageSize) break;
     }
-    if (loaded.isEmpty) {
+    if (loaded.isEmpty || !showSpinner) {
       setState(() {
-        _all = [];
+        _all = loaded;
         _loading = false;
       });
     }
@@ -106,7 +112,7 @@ class _FolderDetailPageState extends State<FolderDetailPage> {
         .push(MaterialPageRoute(
           builder: (_) => ViewerPage(assets: assets, initialIndex: index),
         ))
-        .then((_) => _reload());
+        .then((_) => _reload(showSpinner: false));
   }
 
   Future<void> _setCover(AssetEntity asset) async {
