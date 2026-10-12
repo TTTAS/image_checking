@@ -11,6 +11,7 @@ import 'folder_names.dart';
 import 'media.dart';
 import 'photo_actions.dart';
 import 'selection.dart';
+import 'sort.dart';
 import 'virtual_album_detail.dart';
 import 'virtual_albums.dart';
 import 'widgets.dart';
@@ -175,11 +176,9 @@ class _FoldersTabState extends State<FoldersTab> {
     }).toList();
     switch (_sort) {
       case FolderSort.nameAsc:
-        list.sort((a, b) =>
-            a.path.name.toLowerCase().compareTo(b.path.name.toLowerCase()));
+        list.sort((a, b) => naturalCompare(a.path.name, b.path.name));
       case FolderSort.nameDesc:
-        list.sort((a, b) =>
-            b.path.name.toLowerCase().compareTo(a.path.name.toLowerCase()));
+        list.sort((a, b) => naturalCompare(b.path.name, a.path.name));
       case FolderSort.countDesc:
         list.sort((a, b) => b.count.compareTo(a.count));
       case FolderSort.countAsc:
@@ -206,9 +205,7 @@ class _FoldersTabState extends State<FoldersTab> {
       }
     }
     if (cover == null) {
-      assets.sort((a, b) => (a.title ?? '')
-          .toLowerCase()
-          .compareTo((b.title ?? '').toLowerCase()));
+      assets.sort((a, b) => naturalCompare(a.title ?? '', b.title ?? ''));
       cover = assets.isEmpty ? null : assets.first;
     }
     _coverCache[path.id] = cover;

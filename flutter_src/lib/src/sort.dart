@@ -68,6 +68,55 @@ class SortStore {
   }
 }
 
+/// Compares two names the way people read them: runs of digits are compared
+/// by numeric value, so "2" comes before "10" (plain string order would give
+/// 1, 10, 19, 2, 20, ...). Letters compare case-insensitively.
+int naturalCompare(String a, String b) {
+  final x = a.toLowerCase();
+  final y = b.toLowerCase();
+  var i = 0;
+  var j = 0;
+  while (i < x.length && j < y.length) {
+    final cx = x.codeUnitAt(i);
+    final cy = y.codeUnitAt(j);
+    if (_isDigit(cx) && _isDigit(cy)) {
+      final si = i;
+      final sj = j;
+      while (i < x.length && _isDigit(x.codeUnitAt(i))) {
+        i++;
+      }
+      while (j < y.length && _isDigit(y.codeUnitAt(j))) {
+        j++;
+      }
+      // Skip leading zeros, then the longer number is the bigger one.
+      var zi = si;
+      while (zi < i - 1 && x.codeUnitAt(zi) == 0x30) {
+        zi++;
+      }
+      var zj = sj;
+      while (zj < j - 1 && y.codeUnitAt(zj) == 0x30) {
+        zj++;
+      }
+      final nx = x.substring(zi, i);
+      final ny = y.substring(zj, j);
+      if (nx.length != ny.length) return nx.length - ny.length;
+      final c = nx.compareTo(ny);
+      if (c != 0) return c;
+      // Same value: "01" vs "1" — fewer leading zeros first.
+      if (i - si != j - sj) return (i - si) - (j - sj);
+    } else {
+      if (cx != cy) return cx - cy;
+      i++;
+      j++;
+    }
+  }
+  final rest = (x.length - i) - (y.length - j);
+  if (rest != 0) return rest;
+  return a.compareTo(b);
+}
+
+bool _isDigit(int c) => c >= 0x30 && c <= 0x39;
+
 /// Sorts a list of assets in place-ish (returns a new list).
 ///
 /// [sizeOf] supplies file byte sizes for size sorting (loaded lazily by the
@@ -83,9 +132,7 @@ List<AssetEntity> sortAssets(
       case SortField.date:
         return a.createDateTime.compareTo(b.createDateTime);
       case SortField.name:
-        return (a.title ?? '')
-            .toLowerCase()
-            .compareTo((b.title ?? '').toLowerCase());
+        return naturalCompare(a.title ?? '', b.title ?? '');
       case SortField.size:
         final sa = sizeOf?[a.id] ?? 0;
         final sb = sizeOf?[b.id] ?? 0;

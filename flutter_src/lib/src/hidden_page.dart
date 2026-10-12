@@ -33,8 +33,10 @@ class _HiddenPageState extends State<HiddenPage> {
     super.dispose();
   }
 
-  Future<void> _reload() async {
-    setState(() => _loading = true);
+  /// When [showSpinner] is false the grid stays on screen while refreshing,
+  /// so returning from the viewer keeps the scroll position.
+  Future<void> _reload({bool showSpinner = true}) async {
+    if (showSpinner) setState(() => _loading = true);
     final paths = await PhotoManager.getAssetPathList(
       onlyAll: true,
       type: kMediaType,
@@ -64,7 +66,7 @@ class _HiddenPageState extends State<HiddenPage> {
         .push(MaterialPageRoute(
           builder: (_) => ViewerPage(assets: assets, initialIndex: index),
         ))
-        .then((_) => _reload());
+        .then((_) => _reload(showSpinner: false));
   }
 
   @override
