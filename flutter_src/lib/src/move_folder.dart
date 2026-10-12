@@ -7,6 +7,7 @@ import 'folder_names.dart';
 import 'library.dart';
 import 'media.dart';
 import 'native_folder.dart';
+import 'sort.dart';
 import 'widgets.dart';
 
 class MoveResult {
@@ -140,9 +141,8 @@ class _FolderPickerPageState extends State<_FolderPickerPage> {
       return _displayName(f.path).toLowerCase().contains(q) ||
           f.path.name.toLowerCase().contains(q);
     }).toList();
-    list.sort((a, b) => _displayName(a.path)
-        .toLowerCase()
-        .compareTo(_displayName(b.path).toLowerCase()));
+    list.sort(
+        (a, b) => naturalCompare(_displayName(a.path), _displayName(b.path)));
     return list;
   }
 
@@ -192,9 +192,7 @@ class _FolderPickerPageState extends State<_FolderPickerPage> {
       }
     }
     if (cover == null) {
-      assets.sort((a, b) => (a.title ?? '')
-          .toLowerCase()
-          .compareTo((b.title ?? '').toLowerCase()));
+      assets.sort((a, b) => naturalCompare(a.title ?? '', b.title ?? ''));
       cover = assets.isEmpty ? null : assets.first;
     }
     _coverCache[path.id] = cover;
